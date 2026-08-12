@@ -1,0 +1,47 @@
+{
+  "name": "tuneloop-plugin-setup",
+  "version": "0.1.0",
+  "description": "Generate per-harness plugins for uploading AI coding session transcripts to a Tuneloop server.",
+  "type": "module",
+  "bin": {
+    "tuneloop-plugin-setup": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tuneloop/tuneloop-plugin-setup.git"
+  },
+  "homepage": "https://github.com/tuneloop/tuneloop-plugin-setup#readme",
+  "bugs": {
+    "url": "https://github.com/tuneloop/tuneloop-plugin-setup/issues"
+  },
+  "keywords": [
+    "tuneloop",
+    "claude-code",
+    "opencode",
+    "pi",
+    "ai-agents",
+    "llm",
+    "observability",
+    "developer-tools",
+    "plugin"
+  ],
+  "author": "Tuneloop <bbhat@tuneloop.io>",
+  "license": "MIT",
+  "devDependencies": {
+    "tsup": "^8",
+    "typescript": "^5",
+    "@types/node": "^22"
+  }
+}

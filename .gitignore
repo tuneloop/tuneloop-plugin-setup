@@ -1,0 +1,11 @@
+node_modules
+dist
+
+# Generated test artifacts
+.claude-plugin
+test-plugin
+test-opencode
+tuneloop-opencode
+tuneloop-opencode.js
+tuneloop-pi-extension.ts
+tuneloop-claude-code.zip
