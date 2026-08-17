@@ -23,4 +23,15 @@ export default defineConfig([
     banner: { js: '#!/usr/bin/env node' },
     removeNodeProtocol: false,
   },
+  {
+    entry: { 'codex-upload-entry': 'src/codex-upload-entry.ts' },
+    format: ['esm'],
+    target: 'node22',
+    platform: 'node',
+    clean: false,
+    dts: false,
+    sourcemap: false,
+    banner: { js: '#!/usr/bin/env node' },
+    removeNodeProtocol: false,
+  },
 ])

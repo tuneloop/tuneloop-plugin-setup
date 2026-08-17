@@ -1,0 +1,353 @@
+/**
+ * Installing Codex's `SessionEnd` hook, with two Codex-specific hurdles.
+ *
+ * 1. **Trust.** Codex won't run a user hook until it's trusted: a `[hooks.state]`
+ *    entry whose `trusted_hash` matches the hash Codex computes for the hook
+ *    (a wrong hash means it silently never fires). Rather than reproduce Codex's
+ *    undocumented hashing, we let Codex hand us the canonical key and hash via
+ *    its `app-server` `hooks/list` RPC, write those, then re-list to confirm
+ *    `trusted`. On any failure we leave the hook untrusted and have the CLI print
+ *    the one-time `/hooks` instruction — graceful degradation.
+ * 2. **Timeout.** Codex clamps `SessionEnd` to ~3s, so the hook runs the bundled
+ *    uploader with `--detach` (see codex-upload-entry.ts), handing the work to a
+ *    child that outlives it.
+ *
+ * Unlike the other harnesses this must edit Codex's own `config.toml` (there is
+ * no drop-in plugin directory), so the hook lives between `# >>> tuneloop`
+ * markers and is rewritten by string surgery — no TOML library (this tool stays
+ * dependency-free). The self-contained uploader (server + token baked in) is
+ * written next to it in `CODEX_HOME`.
+ */
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+const BEGIN = '# >>> tuneloop-upload (managed) — do not edit by hand'
+const END = '# <<< tuneloop-upload'
+
+/** Honors `CODEX_HOME`, the same override Codex itself reads. */
+export function codexHome(): string {
+  return process.env.CODEX_HOME ?? join(homedir(), '.codex')
+}
+
+export function codexConfigPath(): string {
+  return join(codexHome(), 'config.toml')
+}
+
+/** Where the self-contained uploader is written. */
+export function codexUploaderPath(): string {
+  return join(codexHome(), 'tuneloop-upload.mjs')
+}
+
+/**
+ * The command Codex runs on SessionEnd. Guarded so a removed uploader is a
+ * no-op, and `--detach` because of the 3s cap.
+ */
+export function codexHookCommand(uploaderPath: string): string {
+  return `[ -f "${uploaderPath}" ] && node "${uploaderPath}" --detach || true`
+}
+
+interface HookState {
+  key: string
+  trustedHash: string
+}
+
+/**
+ * A TOML string for an arbitrary value. Prefers a literal string (single quotes,
+ * no escaping) so the command's double quotes ride along untouched; falls back
+ * to a basic string when the value itself contains a single quote. Codex hashes
+ * the parsed value, so the quoting style never affects the trust hash.
+ */
+export function tomlString(s: string): string {
+  if (!s.includes("'")) return `'${s}'`
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
+/** The managed config block, optionally carrying the trust state. */
+export function buildCodexBlock(command: string, state?: HookState): string {
+  const lines = [
+    BEGIN,
+    '[[hooks.SessionEnd]]',
+    '[[hooks.SessionEnd.hooks]]',
+    'type = "command"',
+    `command = ${tomlString(command)}`,
+    'timeout = 3',
+  ]
+  if (state) {
+    lines.push('', `[hooks.state."${state.key}"]`, 'enabled = true', `trusted_hash = "${state.trustedHash}"`)
+  }
+  lines.push(END)
+  return lines.join('\n')
+}
+
+/** Remove any existing managed block (and the blank lines hugging it). */
+export function stripCodexBlock(text: string): string {
+  const start = text.indexOf(BEGIN)
+  if (start === -1) return text
+  const endMarker = text.indexOf(END, start)
+  if (endMarker === -1) return text // truncated block — leave it rather than guess
+  const end = endMarker + END.length
+  return (text.slice(0, start).replace(/\n*$/, '') + '\n' + text.slice(end).replace(/^\n*/, '')).replace(/\n*$/, '') + '\n'
+}
+
+/** Append our block to `text`, replacing any prior copy of it. */
+export function mergeCodexBlock(text: string, block: string): string {
+  const base = stripCodexBlock(text)
+  const body = base.trim() ? base.replace(/\n*$/, '') + '\n\n' : ''
+  return body + block + '\n'
+}
+
+export interface CodexHooksEntry {
+  key: string
+  eventName: string
+  command: string
+  source: string
+  trustStatus: string
+  currentHash: string
+}
+
+/**
+ * Drive `codex app-server` over stdio JSON-RPC and return every configured hook.
+ *
+ * The handshake is `initialize` → `initialized` → `hooks/list`; the server also
+ * emits unrelated notifications, so responses are matched by request id. Any
+ * failure (Codex absent from PATH, protocol drift, timeout) resolves to null so
+ * the caller degrades to manual trust rather than blocking the install.
+ */
+export function codexHooksList(env: NodeJS.ProcessEnv, timeoutMs = 15_000): Promise<CodexHooksEntry[] | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn('codex', ['app-server'], { env, stdio: ['pipe', 'pipe', 'ignore'] })
+    } catch {
+      resolve(null)
+      return
+    }
+
+    let settled = false
+    const done = (result: CodexHooksEntry[] | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      try {
+        child.kill()
+      } catch {
+        // already gone
+      }
+      resolve(result)
+    }
+    const timer = setTimeout(() => done(null), timeoutMs)
+    // Fail fast and never let an async stream error escape the promise: a codex
+    // that exits mid-handshake would otherwise surface an uncaught EPIPE on a
+    // later tick, outside installCodexHook's try/catch.
+    child.on('error', () => done(null))
+    child.on('close', () => done(null))
+    child.stdin!.on('error', () => done(null))
+    child.stdout!.on('error', () => done(null))
+
+    const send = (o: unknown) => {
+      try {
+        child.stdin!.write(JSON.stringify(o) + '\n')
+      } catch {
+        done(null)
+      }
+    }
+
+    let buf = ''
+    let initialized = false
+    child.stdout!.on('data', (d: Buffer) => {
+      buf += d.toString('utf8')
+      let nl: number
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        if (!line.trim()) continue
+        let msg: { id?: unknown; result?: unknown }
+        try {
+          msg = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (msg.id === 0 && !initialized) {
+          initialized = true
+          send({ jsonrpc: '2.0', method: 'initialized', params: {} })
+          send({ jsonrpc: '2.0', id: 1, method: 'hooks/list', params: {} })
+        } else if (msg.id === 1) {
+          done(parseHooksList(msg.result))
+        }
+      }
+    })
+
+    send({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { clientInfo: { name: 'tuneloop-plugin-setup', version: '1' } } })
+  })
+}
+
+function parseHooksList(result: unknown): CodexHooksEntry[] {
+  const data = (result as { data?: unknown })?.data
+  if (!Array.isArray(data)) return []
+  const out: CodexHooksEntry[] = []
+  for (const ctx of data) {
+    const hooks = (ctx as { hooks?: unknown })?.hooks
+    if (!Array.isArray(hooks)) continue
+    for (const h of hooks as Array<Record<string, unknown>>) {
+      out.push({
+        key: str(h.key),
+        eventName: str(h.eventName),
+        command: str(h.command),
+        source: str(h.source),
+        trustStatus: str(h.trustStatus),
+        currentHash: str(h.currentHash),
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Our SessionEnd hook among whatever else is configured. Matched on the
+ * distinctive uploader filename rather than the absolute path (which varies by
+ * `CODEX_HOME`) — this substring is unique to the block we write.
+ */
+const HOOK_FINGERPRINT = 'tuneloop-upload.mjs'
+
+export function findOurHook(entries: CodexHooksEntry[]): CodexHooksEntry | undefined {
+  return entries.find((e) => e.eventName === 'sessionEnd' && e.command.includes(HOOK_FINGERPRINT))
+}
+
+export interface CodexResult {
+  /** Codex is installed on this machine (its home dir exists). */
+  present: boolean
+  /** The hook block was written to config.toml. */
+  installed: boolean
+  /** Codex reports the hook as trusted — it will fire without any manual step. */
+  trusted: boolean
+  /** The block was already present and trusted; nothing changed. */
+  alreadyTrusted: boolean
+  /** Print the one-time `/hooks` instruction: installed but not verifiably trusted. */
+  needsManualTrust: boolean
+  /** Where the uploader was written, once installed. */
+  uploaderPath?: string
+  /** The edited config file. */
+  configPath?: string
+}
+
+const ABSENT: CodexResult = {
+  present: false,
+  installed: false,
+  trusted: false,
+  alreadyTrusted: false,
+  needsManualTrust: false,
+}
+
+/**
+ * Read the bundled uploader template and bake in the server + token, mirroring
+ * generateClaudeCode. The template ships next to this module in `dist/`.
+ */
+async function renderUploader(server: string, token: string): Promise<string> {
+  const templatePath = join(__dirname, 'codex-upload-entry.js')
+  let script = await readFile(templatePath, 'utf8')
+  script = script.replace(/"__TUNELOOP_SERVER__"|'__TUNELOOP_SERVER__'/, JSON.stringify(server))
+  script = script.replace(/"__TUNELOOP_TOKEN__"|'__TUNELOOP_TOKEN__'/, JSON.stringify(token))
+  return script
+}
+
+export interface GenerateCodexOptions {
+  server: string
+  token: string
+}
+
+/**
+ * Install (and trust, when possible) the Codex SessionEnd hook. Never throws:
+ * a failure here surfaces as `present: false` rather than aborting the CLI.
+ */
+export async function generateCodex(opts: GenerateCodexOptions): Promise<CodexResult> {
+  try {
+    if (!existsSync(codexHome())) return ABSENT
+
+    const configPath = codexConfigPath()
+    const uploaderPath = codexUploaderPath()
+    const command = codexHookCommand(uploaderPath)
+    const env = { ...process.env, CODEX_HOME: codexHome() }
+
+    // Write the self-contained uploader (server + token baked in) first, so the
+    // hash Codex computes covers a command whose target already exists.
+    await writeUploader(uploaderPath, await renderUploader(opts.server, opts.token))
+
+    // Fast path: if a prior run already left our hook trusted, do nothing more.
+    const before = await codexHooksList(env)
+    if (before) {
+      const existing = findOurHook(before)
+      if (existing?.trustStatus === 'trusted') {
+        return { present: true, installed: true, trusted: true, alreadyTrusted: true, needsManualTrust: false, uploaderPath, configPath }
+      }
+    }
+
+    // 1. Write the hook definition (no trust state yet).
+    await writeConfig(configPath, mergeCodexBlock(await readConfig(configPath), buildCodexBlock(command)))
+
+    // 2. Ask Codex for the hook's canonical key and the hash it computes.
+    const listed = await codexHooksList(env)
+    const ours = listed ? findOurHook(listed) : undefined
+    if (!ours || !ours.key || !ours.currentHash) {
+      // Can't verify — leave the (untrusted) hook and fall back to manual trust.
+      return { present: true, installed: true, trusted: false, alreadyTrusted: false, needsManualTrust: true, uploaderPath, configPath }
+    }
+
+    // 3. Write the trust state using Codex's own reported values, then confirm.
+    await writeConfig(
+      configPath,
+      mergeCodexBlock(await readConfig(configPath), buildCodexBlock(command, { key: ours.key, trustedHash: ours.currentHash })),
+    )
+    const after = await codexHooksList(env)
+    const verified = after ? findOurHook(after) : undefined
+    if (verified?.trustStatus === 'trusted') {
+      return { present: true, installed: true, trusted: true, alreadyTrusted: false, needsManualTrust: false, uploaderPath, configPath }
+    }
+
+    // 4. Verification failed — strip the (unverified) trust state so we never
+    // leave a `Modified` hash behind, and degrade to the manual instruction.
+    await writeConfig(configPath, mergeCodexBlock(await readConfig(configPath), buildCodexBlock(command)))
+    return { present: true, installed: true, trusted: false, alreadyTrusted: false, needsManualTrust: true, uploaderPath, configPath }
+  } catch {
+    return ABSENT
+  }
+}
+
+async function writeUploader(path: string, body: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const tmp = `${path}.tuneloop-tmp`
+  await writeFile(tmp, body)
+  await rename(tmp, path)
+}
+
+async function readConfig(path: string): Promise<string> {
+  try {
+    return await readFile(path, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+async function writeConfig(path: string, body: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  // Back up the pristine pre-tuneloop file, then write through a temp file so an
+  // interrupted write can't corrupt a developer's config. Only back up genuine
+  // foreign content: a single run rewrites this file up to three times, so
+  // backing up unconditionally would overwrite the good backup with our block.
+  if (existsSync(path)) {
+    const current = await readFile(path, 'utf8')
+    if (!current.includes(BEGIN)) await writeFile(`${path}.tuneloop-backup`, current)
+  }
+  const tmp = `${path}.tuneloop-tmp`
+  await writeFile(tmp, body)
+  await rename(tmp, path)
+}
+
+function str(v: unknown): string {
+  return typeof v === 'string' ? v : ''
+}

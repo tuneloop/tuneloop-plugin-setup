@@ -90,7 +90,9 @@ async function send(body, format, cwd, sessionKey, sourcePath) {
 }
 
 function findDb() {
-  const roots = [join(homedir(), '.local', 'share', 'opencode')];
+  // OpenCode keeps its data under $XDG_DATA_HOME (default ~/.local/share).
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  const roots = [join(dataHome, 'opencode')];
   for (const root of roots) {
     const p = join(root, 'opencode.db');
     if (existsSync(p)) return p;
@@ -178,7 +180,9 @@ export async function generateOpencode(opts: {
   await writeFile(outputPath, content)
 
   if (opts.install) {
-    const dest = join(homedir(), '.config', 'opencode', 'plugins', 'tuneloop.js')
+    // OpenCode reads plugins from $XDG_CONFIG_HOME (default ~/.config).
+    const configHome = process.env.XDG_CONFIG_HOME || join(homedir(), '.config')
+    const dest = join(configHome, 'opencode', 'plugins', 'tuneloop.js')
     await mkdir(dirname(dest), { recursive: true })
     await writeFile(dest, content)
     return dest

@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import { generateClaudeCode } from './generate/claude-code.js'
+import { generateCodex } from './generate/codex.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
 import { backfill, type SourceSummary } from './backfill.js'
@@ -44,9 +45,10 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
   Options:
     --server <url>     Tuneloop server URL (required)
     --token <token>    Ingest token (required)
-    --harness <name>   One of: claude-code, opencode, pi (required)
+    --harness <name>   One of: claude-code, codex, opencode, pi (required)
     -o <path>          Output path (default: current directory)
     --install          Copy to the harness's local plugin directory (opencode, pi)
+                       (codex always installs into ~/.codex directly)
     --backfill         Upload existing sessions that predate installation
     --since <days>     Backfill only sessions modified within N days
     --limit <n>        Cap number of sessions to backfill
@@ -67,7 +69,7 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
       --harness claude-code --backfill --dry-run
 `
 
-const HARNESSES = ['claude-code', 'opencode', 'pi'] as const
+const HARNESSES = ['claude-code', 'codex', 'opencode', 'pi'] as const
 type Harness = (typeof HARNESSES)[number]
 
 async function main(): Promise<number> {
@@ -106,6 +108,12 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
   const output = str(flags.o) ?? str(flags.output)
   const install = flags.install === true
 
+  // Codex has no drop-in plugin dir: it needs its config.toml edited and the
+  // hook trusted via the app-server RPC, so it always installs directly.
+  if (harness === 'codex') {
+    return runGenerateCodex(server, token)
+  }
+
   let result: string
 
   switch (harness) {
@@ -136,6 +144,29 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
     process.stdout.write('Installed to OpenCode plugins directory. Restart OpenCode to activate.\n')
   } else if (harness === 'pi' && install) {
     process.stdout.write('Installed to Pi extensions directory. Restart Pi to activate.\n')
+  }
+
+  return 0
+}
+
+async function runGenerateCodex(server: string, token: string): Promise<number> {
+  const res = await generateCodex({ server, token })
+
+  if (!res.present) {
+    process.stderr.write('Codex not found on this machine (no ~/.codex directory). Nothing installed.\n')
+    return 1
+  }
+
+  process.stdout.write(`Installed uploader: ${res.uploaderPath}\n`)
+  process.stdout.write(`Hooked SessionEnd in: ${res.configPath}\n`)
+
+  if (res.alreadyTrusted) {
+    process.stdout.write('Already installed and trusted — nothing changed.\n')
+  } else if (res.trusted) {
+    process.stdout.write('Hook is trusted and will fire when your next Codex session ends.\n')
+  } else if (res.needsManualTrust) {
+    process.stdout.write('\nCodex could not auto-trust the hook. Trust it once, manually:\n')
+    process.stdout.write('  start Codex, run  /hooks , and approve the tuneloop SessionEnd hook.\n')
   }
 
   return 0

@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { groupIntoSessions } from './bundle.js'
+import { groupCodexSessions } from './codex.js'
 import { collectOpencodeBundles } from './opencode.js'
 import { upload, uploadBundle, type UploadResult } from './upload.js'
 import { walkFiles } from './walk.js'
@@ -13,10 +14,17 @@ interface FileSource {
   format: string
 }
 
+/** One logical session's files: the primary transcript plus any flat siblings. */
+interface SessionPlan {
+  primary: string
+  extras: string[]
+}
+
 function fileSources(): FileSource[] {
   const home = homedir()
   return [
     { id: 'claude-code', root: join(home, '.claude', 'projects'), ext: '.jsonl', format: 'claude-code-jsonl' },
+    { id: 'codex', root: join(home, '.codex', 'sessions'), ext: '.jsonl', format: 'codex-jsonl' },
     { id: 'pi', root: join(home, '.pi', 'agent', 'sessions'), ext: '.jsonl', format: 'pi-jsonl' },
   ]
 }
@@ -58,8 +66,17 @@ export async function backfill(opts: BackfillOptions): Promise<SourceSummary[]> 
   for (const source of fileSources()) {
     if (!wanted(source.id)) continue
     const found = await walkFiles(source.root, source.ext)
-    const parents = groupIntoSessions(found)
-    const ordered = await orderByAge(parents, opts.sinceDays)
+
+    // Fold every transcript into the logical session it belongs to, so one
+    // upload is one session. How that is determined differs by harness: Claude
+    // Code and Pi co-locate a session's files, Codex relates them by ids in the
+    // content. Either way `--limit` then counts sessions, never truncating one.
+    const plans: SessionPlan[] =
+      source.id === 'codex'
+        ? (await groupCodexSessions(found)).map((g) => ({ primary: g.primary, extras: g.extras }))
+        : groupIntoSessions(found).map((primary) => ({ primary, extras: [] }))
+
+    const ordered = await orderByAge(plans, opts.sinceDays)
     const selected = opts.limit ? ordered.slice(0, opts.limit) : ordered
     if (selected.length === 0) continue
     summaries.push(await uploadFiles(opts, source.id, source.format, selected))
@@ -77,7 +94,7 @@ async function uploadFiles(
   opts: BackfillOptions,
   source: string,
   format: string,
-  files: string[],
+  files: SessionPlan[],
 ): Promise<SourceSummary> {
   const summary: SourceSummary = { source, found: files.length, uploaded: 0, deduped: 0, failed: 0, bytesUploaded: 0 }
 
@@ -86,7 +103,8 @@ async function uploadFiles(
     for (;;) {
       const index = next++
       if (index >= files.length) return
-      const path = files[index]!
+      const plan = files[index]!
+      const path = plan.primary
       const emit = (status: BackfillProgress['status'], extra?: Partial<BackfillProgress>) =>
         opts.onProgress?.({ source, index, total: files.length, label: path, status, ...extra })
 
@@ -99,7 +117,7 @@ async function uploadFiles(
       let result: UploadResult | null = null
       let error: string | undefined
       try {
-        result = await upload({ server: opts.server, token: opts.token, path, format })
+        result = await upload({ server: opts.server, token: opts.token, path, extras: plan.extras, format })
       } catch (err) {
         error = (err as Error).message
       }
@@ -189,18 +207,18 @@ async function uploadOpencode(opts: BackfillOptions): Promise<SourceSummary | nu
   return summary
 }
 
-async function orderByAge(paths: string[], sinceDays?: number): Promise<string[]> {
+async function orderByAge(plans: SessionPlan[], sinceDays?: number): Promise<SessionPlan[]> {
   const cutoff = sinceDays ? Date.now() - sinceDays * 86_400_000 : null
-  const stamped: Array<{ path: string; mtime: number }> = []
-  for (const path of paths) {
+  const stamped: Array<{ plan: SessionPlan; mtime: number }> = []
+  for (const plan of plans) {
     try {
-      const info = await stat(path)
+      const info = await stat(plan.primary)
       if (cutoff && info.mtimeMs < cutoff) continue
-      stamped.push({ path, mtime: info.mtimeMs })
+      stamped.push({ plan, mtime: info.mtimeMs })
     } catch {
       // Raced with deletion — skip.
     }
   }
   stamped.sort((a, b) => b.mtime - a.mtime)
-  return stamped.map((s) => s.path)
+  return stamped.map((s) => s.plan)
 }
