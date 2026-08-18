@@ -50,6 +50,18 @@ npx tuneloop-plugin-setup \
 
 Codex has no drop-in plugin directory, so this always installs directly: it writes a self-contained uploader to `~/.codex/tuneloop-upload.mjs` and adds a `[[hooks.SessionEnd]]` block to `~/.codex/config.toml`. Codex requires hooks to be *trusted* before they run — the installer trusts it automatically via the `codex app-server` API. If that can't be verified, it prints a one-time instruction to trust the hook manually with `/hooks`.
 
+_Codex via marketplace (team distribution)._ For a no-terminal install through Codex's own `/plugins` browser, add `--marketplace` to emit a Codex plugin catalog:
+
+```bash
+npx tuneloop-plugin-setup \
+  --server https://tuneloop.yourcompany.com \
+  --token <token> \
+  --harness codex --marketplace \
+  -o ./tuneloop-codex-marketplace
+```
+
+This writes `.agents/plugins/marketplace.json` plus the plugin under `plugins/tuneloop/`. Commit the directory to a (private) git repo; developers then run `codex plugin marketplace add <repo>` and `codex plugin add tuneloop@tuneloop` (or use `/plugins`). Because Codex does not auto-trust plugin-bundled hooks, each developer approves it once via `/hooks` — after that, sessions upload automatically. The token is baked into the published plugin, so keep the repo private and re-publish to rotate it.
+
 _Codex enterprise (managed hooks)._ Fleets that set `allow_managed_hooks_only = true` ignore user-installed hooks — the command above won't apply. For those, generate admin artifacts instead of installing locally:
 
 ```bash
@@ -109,7 +121,7 @@ Preview first with `--dry-run`. Scope with `--since <days>` and `--limit <n>`.
 | `--harness <name>` | `claude-code`, `codex`, `opencode`, or `pi` (required) |
 | `-o <path>` | Output path (defaults per harness) |
 | `--install` | Copy plugin to the harness's local directory |
-| `--marketplace` | (claude-code) Emit an unpacked marketplace directory for `/plugin install` distribution |
+| `--marketplace` | (claude-code, codex) Emit an unpacked marketplace directory for plugin-install distribution |
 | `--managed` | (codex) Emit enterprise managed-hook artifacts instead of installing locally |
 | `--managed-dir <path>` | (codex `--managed`) Unix managed directory on endpoints |
 | `--managed-dir-windows <path>` | (codex `--managed`) Windows managed directory on endpoints |

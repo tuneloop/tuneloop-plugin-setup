@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { generateClaudeCode, generateClaudeCodeMarketplace } from './generate/claude-code.js'
-import { generateCodex, generateCodexManaged } from './generate/codex.js'
+import { generateCodex, generateCodexManaged, generateCodexMarketplace } from './generate/codex.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
 import { backfill, type SourceSummary } from './backfill.js'
@@ -49,8 +49,8 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
     -o <path>          Output path (default: current directory)
     --install          Copy to the harness's local plugin directory (opencode, pi)
                        (codex always installs into ~/.codex directly)
-    --marketplace      (claude-code) Emit an unpacked marketplace directory for
-                       /plugin install distribution instead of a .zip
+    --marketplace      (claude-code, codex) Emit an unpacked marketplace directory
+                       for plugin-install distribution instead of the default output
     --managed          (codex) Emit admin artifacts for an enterprise managed
                        deployment (allow_managed_hooks_only) instead of a local
                        install. Writes the uploader + requirements.toml + README.
@@ -190,6 +190,9 @@ async function runGenerateCodex(
   if (flags.managed === true) {
     return runGenerateCodexManaged(server, token, flags)
   }
+  if (flags.marketplace === true) {
+    return runGenerateCodexMarketplace(server, token, flags)
+  }
 
   const res = await generateCodex({ server, token })
 
@@ -218,6 +221,27 @@ async function runGenerateCodex(
 // co-located with the managed requirements.toml; override per fleet.
 const DEFAULT_MANAGED_DIR = '/etc/codex/hooks'
 const DEFAULT_WINDOWS_MANAGED_DIR = 'C:\\ProgramData\\OpenAI\\Codex\\hooks'
+
+async function runGenerateCodexMarketplace(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  const outputDir = str(flags.o) ?? str(flags.output) ?? 'tuneloop-codex-marketplace'
+  const res = await generateCodexMarketplace({ server, token, outputDir: resolve(outputDir) })
+
+  process.stdout.write(`Generated Codex marketplace in ${res.outputDir}:\n`)
+  process.stdout.write('  .agents/plugins/marketplace.json\n')
+  process.stdout.write(`  plugins/tuneloop/   — the plugin (server URL + token baked in)\n`)
+  process.stdout.write('\nTo distribute: commit this directory to a (private) git repo. Developers then run:\n')
+  process.stdout.write('  codex plugin marketplace add <your-repo>\n')
+  process.stdout.write(`  codex plugin add ${res.pluginRef}\n`)
+  process.stdout.write('then trust the hook once inside Codex with /hooks (plugin hooks are not auto-trusted).\n')
+  process.stdout.write('\nOr test locally now:\n')
+  process.stdout.write(`  codex plugin marketplace add ${res.outputDir}\n`)
+  process.stdout.write(`  codex plugin add ${res.pluginRef}\n`)
+  return 0
+}
 
 async function runGenerateCodexManaged(
   server: string,

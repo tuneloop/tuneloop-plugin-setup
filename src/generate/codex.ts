@@ -495,3 +495,116 @@ export async function generateCodexManaged(opts: GenerateCodexManagedOptions): P
     windowsManagedDir: opts.windowsManagedDir,
   }
 }
+
+/* ------------------------------------------------------------------------- *
+ * Marketplace mode (Codex plugin, for `codex plugin add`).
+ *
+ * Codex plugins follow the "Agent Plugins" convention: the marketplace manifest
+ * lives at `<repo>/.agents/plugins/marketplace.json`, and a plugin's `source`
+ * path resolves relative to the repo root (verified empirically). A plugin is a
+ * `.codex-plugin/plugin.json` manifest pointing at `hooks/hooks.json`, whose
+ * command references the installed plugin via `${PLUGIN_ROOT}`.
+ *
+ * Codex passes the SessionEnd payload (transcript_path, cwd, session_id) on
+ * stdin to plugin hooks, so the same baked-in uploader works. `--detach` handles
+ * the SessionEnd time cap. Plugin hooks are NOT auto-trusted on install: the
+ * developer trusts once via `/hooks` (Codex's intended flow).
+ * ------------------------------------------------------------------------- */
+
+const PLUGIN_NAME = 'tuneloop'
+const MARKETPLACE_NAME = 'tuneloop'
+
+/** `.codex-plugin/plugin.json` — points at the hooks file. */
+function codexPluginManifest(): string {
+  return JSON.stringify(
+    {
+      name: PLUGIN_NAME,
+      version: '0.1.0',
+      description: 'Uploads session transcripts to your Tuneloop server on SessionEnd.',
+      author: { name: 'Tuneloop', email: 'bbhat@tuneloop.io' },
+      hooks: './hooks/hooks.json',
+    },
+    null,
+    2,
+  )
+}
+
+/** `hooks/hooks.json` — SessionEnd runs the baked-in uploader via ${PLUGIN_ROOT}. */
+function codexPluginHooks(): string {
+  return JSON.stringify(
+    {
+      hooks: {
+        SessionEnd: [
+          {
+            hooks: [
+              {
+                type: 'command',
+                // ${PLUGIN_ROOT} resolves to the installed plugin dir; --detach
+                // hands the upload to a child so SessionEnd never blocks.
+                command: `node "\${PLUGIN_ROOT}/bin/${UPLOADER_NAME}" --detach`,
+                timeout: 10,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    null,
+    2,
+  )
+}
+
+/** `.agents/plugins/marketplace.json` — lists the plugin by repo-relative path. */
+function codexMarketplaceManifest(): string {
+  return JSON.stringify(
+    {
+      name: MARKETPLACE_NAME,
+      plugins: [
+        {
+          name: PLUGIN_NAME,
+          source: { source: 'local', path: `./plugins/${PLUGIN_NAME}` },
+          description: 'Uploads session transcripts to your Tuneloop server on SessionEnd.',
+        },
+      ],
+    },
+    null,
+    2,
+  )
+}
+
+export interface CodexMarketplaceResult {
+  outputDir: string
+  marketplaceName: string
+  pluginRef: string
+}
+
+/**
+ * Emit an unpacked Codex plugin marketplace directory an admin commits to a
+ * (private) git repo, so developers install with `codex plugin marketplace add
+ * <repo>` then `codex plugin add tuneloop@tuneloop` (or via `/plugins`).
+ *
+ *   <outputDir>/
+ *   ├── .agents/plugins/marketplace.json
+ *   └── plugins/tuneloop/                 (the plugin, source "./plugins/tuneloop")
+ *       ├── .codex-plugin/plugin.json
+ *       ├── hooks/hooks.json
+ *       └── bin/tuneloop-upload.mjs        (server + token baked in)
+ */
+export async function generateCodexMarketplace(opts: {
+  server: string
+  token: string
+  outputDir: string
+}): Promise<CodexMarketplaceResult> {
+  await mkdir(join(opts.outputDir, '.agents', 'plugins'), { recursive: true })
+  await writeFile(join(opts.outputDir, '.agents', 'plugins', 'marketplace.json'), codexMarketplaceManifest())
+
+  const pluginRoot = join(opts.outputDir, 'plugins', PLUGIN_NAME)
+  await mkdir(join(pluginRoot, '.codex-plugin'), { recursive: true })
+  await writeFile(join(pluginRoot, '.codex-plugin', 'plugin.json'), codexPluginManifest())
+  await mkdir(join(pluginRoot, 'hooks'), { recursive: true })
+  await writeFile(join(pluginRoot, 'hooks', 'hooks.json'), codexPluginHooks())
+  await mkdir(join(pluginRoot, 'bin'), { recursive: true })
+  await writeFile(join(pluginRoot, 'bin', UPLOADER_NAME), await renderUploader(opts.server, opts.token))
+
+  return { outputDir: opts.outputDir, marketplaceName: MARKETPLACE_NAME, pluginRef: `${PLUGIN_NAME}@${MARKETPLACE_NAME}` }
+}
