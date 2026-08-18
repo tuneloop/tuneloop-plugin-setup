@@ -4,6 +4,8 @@ const TUNELOOP_TOKEN = '__TUNELOOP_TOKEN__'
 import { spawn } from 'node:child_process'
 import { decodeHookPayload, encodeHookPayload } from './detach.js'
 import { readHookPayload, upload, type HookPayload } from './upload.js'
+import { gitConfigEmail } from './git.js'
+import { collectSkills, uploadSkills } from './skills.js'
 
 const FORMAT = 'codex-jsonl'
 
@@ -41,6 +43,16 @@ async function main(): Promise<void> {
   }
 
   await upload({ server: TUNELOOP_SERVER, token: TUNELOOP_TOKEN, hook, format: FORMAT })
+
+  // Report the installed-skill inventory (Codex scope), best-effort — this runs in
+  // the detached child, so it never contends with Codex's ~3s hook clamp.
+  try {
+    const email = (await gitConfigEmail()) ?? null
+    const locations = await collectSkills('codex', hook.cwd)
+    await uploadSkills(TUNELOOP_SERVER, TUNELOOP_TOKEN, email, locations)
+  } catch {
+    /* skills report is strictly best-effort */
+  }
 }
 
 main().catch(() => {
