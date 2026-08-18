@@ -108,6 +108,8 @@ async function send(opts: SendOptions): Promise<UploadResult> {
     repo: repo.repo,
     gitAuthorEmail,
     gitToplevel: repo.toplevel,
+    // Checkout roots, so the server can map a file edited outside gitToplevel.
+    gitWorktrees: repo.worktrees,
     cwd: opts.cwd,
     sourcePath: opts.sourcePath,
     sessionKey: opts.sessionKey ?? null,

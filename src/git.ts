@@ -25,16 +25,40 @@ export interface RepoContext {
   branch: string | null
   repo: string | null
   toplevel: string | null
+  /**
+   * Every checkout root of this repo — the main worktree plus every linked one
+   * (nested `.claude/worktrees/<slug>/` or a sibling dir). The server strips
+   * whichever root contains an edited file, so an agent editing in a worktree
+   * other than `toplevel` still attributes; a file under no root (a foreign
+   * repo) is dropped. Empty when cwd isn't a checkout.
+   */
+  worktrees: string[]
 }
 
 export async function repoContext(cwd: string | undefined): Promise<RepoContext> {
-  if (!cwd) return { remote: null, branch: null, repo: null, toplevel: null }
+  if (!cwd) return { remote: null, branch: null, repo: null, toplevel: null, worktrees: [] }
   return {
     remote: await git(['-C', cwd, 'remote', 'get-url', 'origin']),
     branch: await git(['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD']),
     repo: await repoName(cwd),
     toplevel: await git(['-C', cwd, 'rev-parse', '--show-toplevel']),
+    worktrees: await worktreeRoots(cwd),
   }
+}
+
+/**
+ * Every worktree root of the repo `cwd` lives in (absolute). `git worktree list
+ * --porcelain` emits one `worktree <path>` line per checkout and returns the
+ * same set from any worktree. Empty when cwd isn't a checkout.
+ */
+export async function worktreeRoots(cwd: string): Promise<string[]> {
+  const out = await git(['-C', cwd, 'worktree', 'list', '--porcelain'])
+  if (!out) return []
+  const roots: string[] = []
+  for (const line of out.split('\n')) {
+    if (line.startsWith('worktree ')) roots.push(line.slice('worktree '.length).trim())
+  }
+  return roots
 }
 
 export async function repoName(cwd: string): Promise<string | null> {

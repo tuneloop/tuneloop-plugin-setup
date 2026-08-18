@@ -26,7 +26,7 @@ async function send(body: Buffer, format: string, cwd: string | null, sessionKey
   const gz = gzipSync(body)
   const repo = await repoContext(cwd ?? undefined)
   const email = (await gitConfigEmail()) ?? null
-  const gitAuthorEmail = cwd ? ((await gitConfigEmail(cwd)) ?? null) : null
+  const gitAuthorEmail = (await gitConfigEmail(cwd ?? undefined)) ?? null
 
   const meta = {
     format,
@@ -39,6 +39,8 @@ async function send(body: Buffer, format: string, cwd: string | null, sessionKey
     repo: repo.repo,
     gitAuthorEmail,
     gitToplevel: repo.toplevel,
+    // Checkout roots, so the server can map a file edited outside gitToplevel.
+    gitWorktrees: repo.worktrees,
     cwd,
     sourcePath,
     sessionKey: sessionKey ?? null,
