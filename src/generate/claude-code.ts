@@ -41,8 +41,8 @@ const HOOKS_JSON = JSON.stringify(
 async function renderUploader(server: string, token: string): Promise<string> {
   const templatePath = join(__dirname, 'upload-entry.js')
   let script = await readFile(templatePath, 'utf8')
-  script = script.replace(/"__TUNELOOP_SERVER__"|'__TUNELOOP_SERVER__'/, JSON.stringify(server))
-  script = script.replace(/"__TUNELOOP_TOKEN__"|'__TUNELOOP_TOKEN__'/, JSON.stringify(token))
+  script = script.replace(/"__TUNELOOP_SERVER__"|'__TUNELOOP_SERVER__'/g, () => JSON.stringify(server))
+  script = script.replace(/"__TUNELOOP_TOKEN__"|'__TUNELOOP_TOKEN__'/g, () => JSON.stringify(token))
   return script
 }
 

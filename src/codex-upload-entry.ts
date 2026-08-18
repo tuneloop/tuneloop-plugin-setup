@@ -42,10 +42,16 @@ async function main(): Promise<void> {
     return
   }
 
-  await upload({ server: TUNELOOP_SERVER, token: TUNELOOP_TOKEN, hook, format: FORMAT })
+  // Transcript upload — best-effort and INDEPENDENT of the skills report below.
+  try {
+    await upload({ server: TUNELOOP_SERVER, token: TUNELOOP_TOKEN, hook, format: FORMAT })
+  } catch {
+    /* transcript upload is best-effort */
+  }
 
-  // Report the installed-skill inventory (Codex scope), best-effort — this runs in
-  // the detached child, so it never contends with Codex's ~3s hook clamp.
+  // Report the installed-skill inventory (Codex scope) — independent, so a failed
+  // transcript upload doesn't suppress it. Runs in the detached child, so it never
+  // contends with Codex's ~3s hook clamp.
   try {
     const email = (await gitConfigEmail()) ?? null
     const locations = await collectSkills('codex', hook.cwd)
