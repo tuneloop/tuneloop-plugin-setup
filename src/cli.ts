@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { generateClaudeCode } from './generate/claude-code.js'
+import { generateClaudeCode, generateClaudeCodeMarketplace } from './generate/claude-code.js'
 import { generateCodex, generateCodexManaged } from './generate/codex.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
@@ -49,6 +49,8 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
     -o <path>          Output path (default: current directory)
     --install          Copy to the harness's local plugin directory (opencode, pi)
                        (codex always installs into ~/.codex directly)
+    --marketplace      (claude-code) Emit an unpacked marketplace directory for
+                       /plugin install distribution instead of a .zip
     --managed          (codex) Emit admin artifacts for an enterprise managed
                        deployment (allow_managed_hooks_only) instead of a local
                        install. Writes the uploader + requirements.toml + README.
@@ -119,6 +121,11 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
     return runGenerateCodex(server, token, flags)
   }
 
+  // Claude Code marketplace layout for `/plugin install` distribution.
+  if (harness === 'claude-code' && flags.marketplace === true) {
+    return runGenerateClaudeCodeMarketplace(server, token, flags)
+  }
+
   let result: string
 
   switch (harness) {
@@ -151,6 +158,27 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
     process.stdout.write('Installed to Pi extensions directory. Restart Pi to activate.\n')
   }
 
+  return 0
+}
+
+async function runGenerateClaudeCodeMarketplace(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  const outputDir = str(flags.o) ?? str(flags.output) ?? 'tuneloop-claude-code-marketplace'
+  const res = await generateClaudeCodeMarketplace({ server, token, outputDir: resolve(outputDir) })
+
+  process.stdout.write(`Generated marketplace in ${res.outputDir}:\n`)
+  process.stdout.write('  .claude-plugin/marketplace.json\n')
+  process.stdout.write('  tuneloop/   — the plugin (server URL + token baked in)\n')
+  process.stdout.write('\nTo distribute: commit this directory to a (private) git repo. Developers then run,\n')
+  process.stdout.write('inside Claude Code:\n')
+  process.stdout.write('  /plugin marketplace add <your-repo>\n')
+  process.stdout.write(`  /plugin install ${res.pluginRef}\n`)
+  process.stdout.write('\nOr test locally now:\n')
+  process.stdout.write(`  claude plugin marketplace add ${res.outputDir} --scope user\n`)
+  process.stdout.write(`  claude plugin install ${res.pluginRef} --scope user\n`)
   return 0
 }
 

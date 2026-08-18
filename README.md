@@ -27,6 +27,18 @@ npx tuneloop-plugin-setup \
 
 Load it with `claude --plugin-dir ./tuneloop-claude-code` (after unzipping), or upload to your org's plugin marketplace.
 
+For distribution via a marketplace (developers install with `/plugin install`), add `--marketplace` to emit an unpacked catalog instead of a zip:
+
+```bash
+npx tuneloop-plugin-setup \
+  --server https://tuneloop.yourcompany.com \
+  --token <token> \
+  --harness claude-code --marketplace \
+  -o ./tuneloop-claude-code-marketplace
+```
+
+This writes `.claude-plugin/marketplace.json` plus the plugin under `tuneloop/`. Commit the directory to a (private) git repo; developers then run `/plugin marketplace add <repo>` and `/plugin install tuneloop@tuneloop` inside Claude Code. The token is baked into the published plugin, so keep the repo private and re-publish to rotate it.
+
 **Codex** — installs a `SessionEnd` hook directly into `~/.codex`:
 
 ```bash
@@ -97,6 +109,7 @@ Preview first with `--dry-run`. Scope with `--since <days>` and `--limit <n>`.
 | `--harness <name>` | `claude-code`, `codex`, `opencode`, or `pi` (required) |
 | `-o <path>` | Output path (defaults per harness) |
 | `--install` | Copy plugin to the harness's local directory |
+| `--marketplace` | (claude-code) Emit an unpacked marketplace directory for `/plugin install` distribution |
 | `--managed` | (codex) Emit enterprise managed-hook artifacts instead of installing locally |
 | `--managed-dir <path>` | (codex `--managed`) Unix managed directory on endpoints |
 | `--managed-dir-windows <path>` | (codex `--managed`) Windows managed directory on endpoints |
