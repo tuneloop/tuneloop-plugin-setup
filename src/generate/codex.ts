@@ -49,7 +49,13 @@ export function codexUploaderPath(): string {
  * no-op, and `--detach` because of the 3s cap.
  */
 export function codexHookCommand(uploaderPath: string): string {
-  return `[ -f "${uploaderPath}" ] && node "${uploaderPath}" --detach || true`
+  const path = quotePosixShellArg(uploaderPath)
+  return `[ -f ${path} ] && node ${path} --detach || true`
+}
+
+/** Quote one argument for a POSIX shell without allowing any expansion. */
+export function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`
 }
 
 interface HookState {
@@ -59,9 +65,9 @@ interface HookState {
 
 /**
  * A TOML string for an arbitrary value. Prefers a literal string (single quotes,
- * no escaping) so the command's double quotes ride along untouched; falls back
- * to a basic string when the value itself contains a single quote. Codex hashes
- * the parsed value, so the quoting style never affects the trust hash.
+ * no escaping), and falls back to a basic string when the value itself contains
+ * a single quote. Codex hashes the parsed value, so the quoting style never
+ * affects the trust hash.
  */
 export function tomlString(s: string): string {
   if (!s.includes("'")) return `'${s}'`
@@ -278,11 +284,12 @@ export async function generateCodex(opts: GenerateCodexOptions): Promise<CodexRe
     // hash Codex computes covers a command whose target already exists.
     await writeUploader(uploaderPath, await renderUploader(opts.server, opts.token))
 
-    // Fast path: if a prior run already left our hook trusted, do nothing more.
+    // Fast path: only an already-trusted hook with the current command is done.
+    // Command changes must be rewritten and re-trusted during upgrades.
     const before = await codexHooksList(env)
     if (before) {
       const existing = findOurHook(before)
-      if (existing?.trustStatus === 'trusted') {
+      if (existing?.trustStatus === 'trusted' && existing.command === command) {
         return { present: true, installed: true, trusted: true, alreadyTrusted: true, needsManualTrust: false, uploaderPath, configPath }
       }
     }
@@ -390,7 +397,7 @@ function windowsUploaderPath(dir: string): string {
  * emits them as literal strings (single quotes) — matching the Codex docs.
  */
 export function buildManagedRequirements(managedDir: string, windowsManagedDir: string): string {
-  const unixCommand = `node "${posixUploaderPath(managedDir)}" --detach`
+  const unixCommand = `node ${quotePosixShellArg(posixUploaderPath(managedDir))} --detach`
   const windowsCommand = `node "${windowsUploaderPath(windowsManagedDir)}" --detach`
   return [
     '# Managed Tuneloop SessionEnd hook for Codex.',
