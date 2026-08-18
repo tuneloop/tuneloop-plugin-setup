@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { generateClaudeCode } from './generate/claude-code.js'
-import { generateCodex } from './generate/codex.js'
+import { generateCodex, generateCodexManaged } from './generate/codex.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
 import { backfill, type SourceSummary } from './backfill.js'
@@ -49,6 +49,11 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
     -o <path>          Output path (default: current directory)
     --install          Copy to the harness's local plugin directory (opencode, pi)
                        (codex always installs into ~/.codex directly)
+    --managed          (codex) Emit admin artifacts for an enterprise managed
+                       deployment (allow_managed_hooks_only) instead of a local
+                       install. Writes the uploader + requirements.toml + README.
+    --managed-dir <p>       (codex --managed) Unix managed dir on endpoints
+    --managed-dir-windows <p>  (codex --managed) Windows managed dir on endpoints
     --backfill         Upload existing sessions that predate installation
     --since <days>     Backfill only sessions modified within N days
     --limit <n>        Cap number of sessions to backfill
@@ -111,7 +116,7 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
   // Codex has no drop-in plugin dir: it needs its config.toml edited and the
   // hook trusted via the app-server RPC, so it always installs directly.
   if (harness === 'codex') {
-    return runGenerateCodex(server, token)
+    return runGenerateCodex(server, token, flags)
   }
 
   let result: string
@@ -149,7 +154,15 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
   return 0
 }
 
-async function runGenerateCodex(server: string, token: string): Promise<number> {
+async function runGenerateCodex(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  if (flags.managed === true) {
+    return runGenerateCodexManaged(server, token, flags)
+  }
+
   const res = await generateCodex({ server, token })
 
   if (!res.present) {
@@ -169,6 +182,37 @@ async function runGenerateCodex(server: string, token: string): Promise<number> 
     process.stdout.write('  start Codex, run  /hooks , and approve the tuneloop SessionEnd hook.\n')
   }
 
+  return 0
+}
+
+// Default managed directories. Codex documents no default (the admin sets
+// managed_dir / windows_managed_dir), so these are sensible starting points
+// co-located with the managed requirements.toml; override per fleet.
+const DEFAULT_MANAGED_DIR = '/etc/codex/hooks'
+const DEFAULT_WINDOWS_MANAGED_DIR = 'C:\\ProgramData\\OpenAI\\Codex\\hooks'
+
+async function runGenerateCodexManaged(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  const outputDir = str(flags.o) ?? str(flags.output) ?? 'tuneloop-codex-managed'
+  const managedDir = str(flags['managed-dir']) ?? DEFAULT_MANAGED_DIR
+  const windowsManagedDir = str(flags['managed-dir-windows']) ?? DEFAULT_WINDOWS_MANAGED_DIR
+
+  const res = await generateCodexManaged({
+    server,
+    token,
+    outputDir: resolve(outputDir),
+    managedDir,
+    windowsManagedDir,
+  })
+
+  process.stdout.write(`Generated managed Codex artifacts in ${res.outputDir}:\n`)
+  process.stdout.write(`  ${res.scriptPath.split('/').pop()}        — uploader (deploy to ${res.managedDir})\n`)
+  process.stdout.write('  requirements.toml   — merge into your managed config\n')
+  process.stdout.write('  README-admin.md     — deployment steps\n')
+  process.stdout.write('\nDistribute both files via your MDM. See README-admin.md for the exact paths.\n')
   return 0
 }
 

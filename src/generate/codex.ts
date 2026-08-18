@@ -351,3 +351,147 @@ async function writeConfig(path: string, body: string): Promise<void> {
 function str(v: unknown): string {
   return typeof v === 'string' ? v : ''
 }
+
+/* ------------------------------------------------------------------------- *
+ * Managed (enterprise) mode.
+ *
+ * When a fleet sets `allow_managed_hooks_only = true`, Codex ignores every
+ * user/project/session/plugin hook and loads only hooks from the managed
+ * `requirements.toml` (Unix: /etc/codex/requirements.toml, Windows:
+ * %ProgramData%\OpenAI\Codex\requirements.toml). Managed hooks are trusted by
+ * policy — no `hooks/list` trust dance — but Codex does *not* distribute the
+ * scripts: the admin ships both the uploader (into `managed_dir`) and the
+ * requirements.toml block via their own device management (MDM).
+ *
+ * So the user-install flow above does not apply. Instead we generate the two
+ * artifacts an admin distributes, plus a short README. This never touches the
+ * local machine's config or talks to `app-server`.
+ * ------------------------------------------------------------------------- */
+
+const UPLOADER_NAME = 'tuneloop-upload.mjs'
+
+/** Join a POSIX managed dir with the uploader name, tolerant of a trailing slash. */
+function posixUploaderPath(dir: string): string {
+  return `${dir.replace(/\/+$/, '')}/${UPLOADER_NAME}`
+}
+
+/** Join a Windows managed dir with the uploader name, tolerant of a trailing slash. */
+function windowsUploaderPath(dir: string): string {
+  return `${dir.replace(/\\+$/, '')}\\${UPLOADER_NAME}`
+}
+
+/**
+ * The `requirements.toml` fragment an admin merges into the managed config.
+ *
+ * `--detach` is still needed: the ~3s SessionEnd clamp is a runtime limit,
+ * unrelated to whether the hook is user or managed. The uploader is guaranteed
+ * present (MDM installs it), so the command drops the existence guard the
+ * user-install path uses. Windows paths carry backslashes, so `tomlString`
+ * emits them as literal strings (single quotes) — matching the Codex docs.
+ */
+export function buildManagedRequirements(managedDir: string, windowsManagedDir: string): string {
+  const unixCommand = `node "${posixUploaderPath(managedDir)}" --detach`
+  const windowsCommand = `node "${windowsUploaderPath(windowsManagedDir)}" --detach`
+  return [
+    '# Managed Tuneloop SessionEnd hook for Codex.',
+    '# Merge this into your managed requirements.toml — see README-admin.md.',
+    '',
+    '# Only managed hooks run in this deployment; user hooks are ignored.',
+    'allow_managed_hooks_only = true',
+    '',
+    '[features]',
+    'hooks = true',
+    '',
+    '[hooks]',
+    `managed_dir = ${tomlString(managedDir)}`,
+    `windows_managed_dir = ${tomlString(windowsManagedDir)}`,
+    '',
+    '[[hooks.SessionEnd]]',
+    '[[hooks.SessionEnd.hooks]]',
+    'type = "command"',
+    `command = ${tomlString(unixCommand)}`,
+    `command_windows = ${tomlString(windowsCommand)}`,
+    'timeout = 3',
+    '',
+  ].join('\n')
+}
+
+function buildManagedReadme(managedDir: string, windowsManagedDir: string): string {
+  return `# Tuneloop — Codex managed-hook deployment (enterprise)
+
+These artifacts are for a fleet running \`allow_managed_hooks_only = true\`, where
+Codex ignores user-installed hooks. Distribute them with your device management
+(MDM); Codex does not distribute hook scripts itself. Developers run nothing and
+cannot disable the hook.
+
+## Files in this directory
+- \`${UPLOADER_NAME}\` — the self-contained uploader (server URL + token already
+  baked in). Requires Node.js 22+ on each endpoint.
+- \`requirements.toml\` — the managed hook block to merge into your managed config.
+
+## Steps
+1. **Install the uploader** on every endpoint, via MDM:
+   - macOS / Linux: copy \`${UPLOADER_NAME}\` to \`${posixUploaderPath(managedDir)}\`
+   - Windows: copy \`${UPLOADER_NAME}\` to \`${windowsUploaderPath(windowsManagedDir)}\`
+   (Adjust the paths with \`--managed-dir\` / \`--managed-dir-windows\` at generation
+   time if your managed directory differs; the requirements.toml above must point
+   at wherever the script actually lands.)
+2. **Merge \`requirements.toml\`** into the managed config, distributed via MDM:
+   - macOS / Linux: \`/etc/codex/requirements.toml\`
+   - Windows: \`%ProgramData%\\OpenAI\\Codex\\requirements.toml\`
+   If a managed \`requirements.toml\` already exists, merge the \`[hooks]\` and
+   \`[[hooks.SessionEnd]]\` entries into it rather than overwriting.
+3. **Ensure Node.js 22+** is on the PATH for the Codex process on each endpoint.
+
+No trust step is required — managed hooks are trusted by policy and fire when a
+Codex session ends. The upload runs in a detached child, so the ~3s SessionEnd
+limit never blocks a session.
+`
+}
+
+export interface GenerateCodexManagedOptions {
+  server: string
+  token: string
+  /** Directory to write the three artifacts into. */
+  outputDir: string
+  /** Absolute Unix managed dir the uploader will be installed to on endpoints. */
+  managedDir: string
+  /** Absolute Windows managed dir the uploader will be installed to on endpoints. */
+  windowsManagedDir: string
+}
+
+export interface CodexManagedResult {
+  outputDir: string
+  scriptPath: string
+  requirementsPath: string
+  readmePath: string
+  managedDir: string
+  windowsManagedDir: string
+}
+
+/**
+ * Generate the admin artifacts for a managed Codex deployment. Writes the
+ * baked-in uploader, a requirements.toml fragment, and an admin README into
+ * `outputDir`. Does not touch the local Codex config or the network.
+ */
+export async function generateCodexManaged(opts: GenerateCodexManagedOptions): Promise<CodexManagedResult> {
+  await mkdir(opts.outputDir, { recursive: true })
+
+  const scriptPath = join(opts.outputDir, UPLOADER_NAME)
+  await writeFile(scriptPath, await renderUploader(opts.server, opts.token))
+
+  const requirementsPath = join(opts.outputDir, 'requirements.toml')
+  await writeFile(requirementsPath, buildManagedRequirements(opts.managedDir, opts.windowsManagedDir))
+
+  const readmePath = join(opts.outputDir, 'README-admin.md')
+  await writeFile(readmePath, buildManagedReadme(opts.managedDir, opts.windowsManagedDir))
+
+  return {
+    outputDir: opts.outputDir,
+    scriptPath,
+    requirementsPath,
+    readmePath,
+    managedDir: opts.managedDir,
+    windowsManagedDir: opts.windowsManagedDir,
+  }
+}
