@@ -93,6 +93,21 @@ export async function repoSlug(cwd: string): Promise<string | null> {
   return slugFromRemote(await git(['-C', cwd, 'remote', 'get-url', 'origin']))
 }
 
+/**
+ * The files defining a skill folder's content identity, per git: tracked plus
+ * untracked-but-not-ignored (the set `git status` treats as the working tree),
+ * relative to `root`, forward-slashed. Null when `root` isn't a checkout, so the
+ * caller falls back to a raw fs walk. Keeps folderHash consistent with the dirty
+ * flag — both ignore .gitignore'd scratch, so it neither spawns a phantom version
+ * nor false-flags dirty.
+ */
+export async function gitFolderFiles(root: string): Promise<string[] | null> {
+  const inside = await git(['-C', root, 'rev-parse', '--is-inside-work-tree'], root)
+  if (inside !== 'true') return null
+  const out = await git(['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'], root)
+  return out === null ? [] : out.split('\0').filter(Boolean)
+}
+
 /** Canonical `owner/name` from a remote URL, or null when it doesn't parse. */
 export function slugFromRemote(remote: string | null): string | null {
   const m = remote?.trim().match(/[:/]([^/:]+)\/([^/]+?)(?:\.git)?$/)
@@ -135,6 +150,10 @@ export async function skillProvenance(skillPath: string): Promise<SkillProvenanc
   if (!rp) return null
   const [toplevel, prefixRaw] = rp.split('\n')
   if (!toplevel) return null
+  // Empty `--show-prefix` ⇒ the skill IS the repo root (a root-`SKILL.md` repo
+  // cloned into the skills dir). Keep `path=''` verbatim; don't fall back to the
+  // repo basename (the server would treat it as a nonexistent subdir). Only a
+  // root-DIR skill yields '' — a file at root still has a non-empty basename.
   const prefix = (prefixRaw ?? '').replace(/\/$/, '')
   const path = isDir ? prefix : (prefix ? prefix + '/' : '') + basename(real)
   const pathspec = isDir ? '.' : basename(real)
@@ -142,14 +161,17 @@ export async function skillProvenance(skillPath: string): Promise<SkillProvenanc
   const remote = await git(['-C', cwd, 'remote', 'get-url', 'origin'], cwd)
   const logLine = await git(['-C', cwd, 'log', '-1', '--format=%H%x09%cI', '--', pathspec], cwd)
   const [commit, committedAt] = logLine ? logLine.split('\t') : [null, null]
-  // `--untracked-files=no`: only tracked modifications count as dirty; incidental
-  // untracked files (.DS_Store, swap files) don't false-flag a skill as diverged.
-  const status = await git(['-C', cwd, 'status', '--porcelain', '--untracked-files=no', '--', pathspec], cwd)
+  // `--untracked-files=all`: a newly ADDED (non-ignored) file counts as dirty, so
+  // `dirty` stays consistent with folderHash (which hashes every file in the folder,
+  // so an added file already makes a new version). The old `=no` produced the
+  // contradiction "new version, but clean". git still hides .gitignore'd paths, so
+  // ignored scratch doesn't false-flag.
+  const status = await git(['-C', cwd, 'status', '--porcelain', '--untracked-files=all', '--', pathspec], cwd)
 
   return {
     remote: remote ?? null,
     repo: slugFromRemote(remote),
-    path: path || basename(real),
+    path, // '' = repo root (see above); a subdir/file is its repo-relative path
     commit: commit ?? null,
     committedAt: committedAt ?? null,
     dirty: status !== null,

@@ -23,7 +23,7 @@ import { createHash } from 'node:crypto'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import { repoContext, repoSlug, skillProvenance, type SkillProvenance } from './git.js'
+import { gitFolderFiles, repoContext, repoSlug, skillProvenance, type SkillProvenance } from './git.js'
 
 export type Harness = 'claude-code' | 'codex' | 'opencode' | 'pi'
 
@@ -132,6 +132,26 @@ async function walkFiles(root: string): Promise<Array<{ rel: string; hash: strin
   return out.sort((a, b) => a.rel.localeCompare(b.rel))
 }
 
+/**
+ * The files defining a skill folder's version identity, `{ rel, hash }` sorted by path.
+ * In a git checkout: git's working-tree set (via gitFolderFiles), so folderHash agrees
+ * with the dirty flag and ignores .gitignore'd scratch; outside one: the raw fs walk.
+ * Same hash convention either way, so a folder with no ignored files hashes identically.
+ */
+async function folderFiles(root: string): Promise<Array<{ rel: string; hash: string }>> {
+  const tracked = await gitFolderFiles(root)
+  if (tracked === null) return walkFiles(root) // not a checkout — raw fs walk
+  const out: Array<{ rel: string; hash: string }> = []
+  for (const rel of tracked.slice(0, MAX_FOLDER_FILES)) {
+    try {
+      out.push({ rel, hash: sha(await readFile(join(root, rel), 'utf8')) })
+    } catch {
+      /* unreadable/binary file — skip, mirrors walkFiles */
+    }
+  }
+  return out.sort((a, b) => a.rel.localeCompare(b.rel))
+}
+
 /** Immediate child directory names of `dir` (follows symlinked dirs); [] if missing. */
 async function listDirs(dir: string): Promise<string[]> {
   let entries
@@ -161,7 +181,8 @@ function buildEntry(name: string, frontmatter: string, body: string, folderHash:
   if (prov) {
     if (prov.remote) entry.sourceRemote = prov.remote
     if (prov.repo) entry.sourceRepo = prov.repo
-    if (prov.path) entry.sourcePath = prov.path
+    // `!= null`, not truthy: `''` is a valid path (the skill is the repo root).
+    if (prov.path != null) entry.sourcePath = prov.path
     if (prov.commit) entry.sourceCommit = prov.commit
     if (prov.committedAt) entry.sourceCommittedAt = prov.committedAt
     entry.sourceDirty = prov.dirty
@@ -178,7 +199,7 @@ async function readSkillDir(root: string, name: string): Promise<SkillEntry | nu
     return null // no SKILL.md → not a skill
   }
   const { frontmatter, body } = splitFrontmatter(text)
-  const files = await walkFiles(root)
+  const files = await folderFiles(root)
   const folderHash = sha(files.map((f) => f.rel + '\0' + f.hash).join('\n'))
   const extrasHash = sha(
     files.filter((f) => f.rel !== 'SKILL.md').map((f) => f.rel + '\0' + f.hash).join('\n') +
