@@ -61,6 +61,8 @@ export async function uploadBundle(opts: {
   format: string
   sourcePath: string
   cwd?: string
+  /** Overrides the git-config email — Cursor hooks carry the account email. */
+  userEmail?: string
   timeoutMs?: number
 }): Promise<UploadResult> {
   return send({
@@ -72,6 +74,7 @@ export async function uploadBundle(opts: {
     cwd: opts.cwd ?? null,
     sessionKey: opts.bundle.sessionKey,
     fileCount: opts.bundle.files.length,
+    userEmail: opts.userEmail,
     timeoutMs: opts.timeoutMs,
   })
 }
@@ -85,6 +88,7 @@ interface SendOptions {
   cwd: string | null
   sessionKey?: string | null
   fileCount?: number
+  userEmail?: string
   timeoutMs?: number
 }
 
@@ -94,7 +98,7 @@ async function send(opts: SendOptions): Promise<UploadResult> {
   const gz = gzipSync(body)
 
   const repo = await repoContext(opts.cwd ?? undefined)
-  const email = (await gitConfigEmail()) ?? null
+  const email = opts.userEmail ?? (await gitConfigEmail()) ?? null
   const gitAuthorEmail = (await gitConfigEmail(opts.cwd ?? undefined)) ?? null
 
   const meta = {

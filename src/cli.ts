@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import { generateClaudeCode } from './generate/claude-code.js'
+import { generateCursor } from './generate/cursor.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
 import { backfill, type SourceSummary } from './backfill.js'
@@ -44,7 +45,7 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
   Options:
     --server <url>     Tuneloop server URL (required)
     --token <token>    Ingest token (required)
-    --harness <name>   One of: claude-code, opencode, pi (required)
+    --harness <name>   One of: claude-code, opencode, pi, cursor (required)
     -o <path>          Output path (default: current directory)
     --install          Copy to the harness's local plugin directory (opencode, pi)
     --backfill         Upload existing sessions that predate installation
@@ -67,7 +68,7 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
       --harness claude-code --backfill --dry-run
 `
 
-const HARNESSES = ['claude-code', 'opencode', 'pi'] as const
+const HARNESSES = ['claude-code', 'opencode', 'pi', 'cursor'] as const
 type Harness = (typeof HARNESSES)[number]
 
 async function main(): Promise<number> {
@@ -96,6 +97,13 @@ async function main(): Promise<number> {
   const serverUrl = server.replace(/\/+$/, '')
 
   if (flags.backfill) {
+    if (harness === 'cursor') {
+      // Deliberate, not a TODO: Cursor's primary data (tokens, thinking, tool
+      // outcomes) exists only while hooks observe it — there is no historical
+      // corpus to sweep. Coverage starts at install.
+      process.stderr.write('Backfill is not supported for cursor: sessions are captured live via hooks,\nso coverage starts when the plugin is installed.\n')
+      return 1
+    }
     return runBackfill(serverUrl, token, harness, flags)
   }
 
@@ -124,6 +132,11 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
       result = await generatePi({ server, token, output: resolve(out), install })
       break
     }
+    case 'cursor': {
+      const out = output ?? 'tuneloop-cursor.zip'
+      result = await generateCursor({ server, token, output: resolve(out), install })
+      break
+    }
   }
 
   process.stdout.write(`Generated: ${result}\n`)
@@ -136,6 +149,15 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
     process.stdout.write('Installed to OpenCode plugins directory. Restart OpenCode to activate.\n')
   } else if (harness === 'pi' && install) {
     process.stdout.write('Installed to Pi extensions directory. Restart Pi to activate.\n')
+  } else if (harness === 'cursor') {
+    if (install) {
+      process.stdout.write('Hooks merged into ~/.cursor/hooks.json (Cursor hot-reloads; no restart needed).\n')
+      process.stdout.write('Verify: the newest cursor.hooks.*.log under Cursor\'s logs must say "Loaded N hook(s)" —\n')
+      process.stdout.write('one invalid hook name silently disables ALL hooks.\n')
+    } else {
+      process.stdout.write('\nInstall the zip as a Cursor plugin (org marketplace or local), or re-run with --install\n')
+      process.stdout.write('to register the hooks directly in ~/.cursor/hooks.json.\n')
+    }
   }
 
   return 0
