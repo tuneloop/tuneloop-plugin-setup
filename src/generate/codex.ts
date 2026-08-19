@@ -21,19 +21,18 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { codexHome } from '../codex.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const BEGIN = '# >>> tuneloop-upload (managed) — do not edit by hand'
 const END = '# <<< tuneloop-upload'
 
-/** Honors `CODEX_HOME`, the same override Codex itself reads. */
-export function codexHome(): string {
-  return process.env.CODEX_HOME ?? join(homedir(), '.codex')
-}
+// The installer and backfill share one Codex-home resolver (see ../codex.ts) so
+// a custom CODEX_HOME can never point them at different locations.
+export { codexHome }
 
 export function codexConfigPath(): string {
   return join(codexHome(), 'config.toml')
@@ -257,8 +256,8 @@ const ABSENT: CodexResult = {
 async function renderUploader(server: string, token: string): Promise<string> {
   const templatePath = join(__dirname, 'codex-upload-entry.js')
   let script = await readFile(templatePath, 'utf8')
-  script = script.replace(/"__TUNELOOP_SERVER__"|'__TUNELOOP_SERVER__'/, JSON.stringify(server))
-  script = script.replace(/"__TUNELOOP_TOKEN__"|'__TUNELOOP_TOKEN__'/, JSON.stringify(token))
+  script = script.replace(/"__TUNELOOP_SERVER__"|'__TUNELOOP_SERVER__'/g, () => JSON.stringify(server))
+  script = script.replace(/"__TUNELOOP_TOKEN__"|'__TUNELOOP_TOKEN__'/g, () => JSON.stringify(token))
   return script
 }
 

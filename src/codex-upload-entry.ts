@@ -2,8 +2,11 @@ const TUNELOOP_SERVER = '__TUNELOOP_SERVER__'
 const TUNELOOP_TOKEN = '__TUNELOOP_TOKEN__'
 
 import { spawn } from 'node:child_process'
+import { codexSessionPlan } from './codex.js'
 import { decodeHookPayload, encodeHookPayload } from './detach.js'
 import { readHookPayload, upload, type HookPayload } from './upload.js'
+import { accountEmail } from './git.js'
+import { collectSkills, uploadSkills } from './skills.js'
 
 const FORMAT = 'codex-jsonl'
 
@@ -40,7 +43,36 @@ async function main(): Promise<void> {
     return
   }
 
-  await upload({ server: TUNELOOP_SERVER, token: TUNELOOP_TOKEN, hook, format: FORMAT })
+  // Transcript upload — best-effort and INDEPENDENT of the skills report below.
+  // Codex fires SessionEnd only for the root thread, so fold in its sub-agent
+  // rollout siblings here (same grouping backfill uses) — otherwise their spend
+  // and content are lost until a later backfill. Runs in the detached child, so
+  // the directory scan never contends with Codex's ~3s SessionEnd clamp.
+  try {
+    const plan = await codexSessionPlan(hook.transcript_path)
+    await upload({
+      server: TUNELOOP_SERVER,
+      token: TUNELOOP_TOKEN,
+      path: plan.primary,
+      extras: plan.extras,
+      sessionKey: plan.sessionKey ?? hook.session_id ?? null,
+      hook,
+      format: FORMAT,
+    })
+  } catch {
+    /* transcript upload is best-effort */
+  }
+
+  // Report the installed-skill inventory (Codex scope) — independent, so a failed
+  // transcript upload doesn't suppress it. Runs in the detached child, so it never
+  // contends with Codex's ~3s hook clamp.
+  try {
+    const email = await accountEmail()
+    const locations = await collectSkills('codex', hook.cwd)
+    await uploadSkills(TUNELOOP_SERVER, TUNELOOP_TOKEN, email, locations)
+  } catch {
+    /* skills report is strictly best-effort */
+  }
 }
 
 main().catch(() => {

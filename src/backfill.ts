@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { groupIntoSessions } from './bundle.js'
-import { groupCodexSessions } from './codex.js'
+import { codexSessionsRoot, groupCodexSessions } from './codex.js'
 import { collectOpencodeBundles } from './opencode.js'
 import { upload, uploadBundle, type UploadResult } from './upload.js'
 import { walkFiles } from './walk.js'
@@ -18,13 +18,18 @@ interface FileSource {
 interface SessionPlan {
   primary: string
   extras: string[]
+  /** The session's stable id, so the server converges resumes/re-uploads onto
+   * the newest bundle. Null when the harness has no in-content id. */
+  sessionKey: string | null
 }
 
 function fileSources(): FileSource[] {
   const home = homedir()
   return [
     { id: 'claude-code', root: join(home, '.claude', 'projects'), ext: '.jsonl', format: 'claude-code-jsonl' },
-    { id: 'codex', root: join(home, '.codex', 'sessions'), ext: '.jsonl', format: 'codex-jsonl' },
+    // Codex honors CODEX_HOME, so backfill must resolve the same root the live
+    // installer does — a hardcoded ~/.codex would miss a custom home entirely.
+    { id: 'codex', root: codexSessionsRoot(), ext: '.jsonl', format: 'codex-jsonl' },
     { id: 'pi', root: join(home, '.pi', 'agent', 'sessions'), ext: '.jsonl', format: 'pi-jsonl' },
   ]
 }
@@ -73,8 +78,8 @@ export async function backfill(opts: BackfillOptions): Promise<SourceSummary[]> 
     // content. Either way `--limit` then counts sessions, never truncating one.
     const plans: SessionPlan[] =
       source.id === 'codex'
-        ? (await groupCodexSessions(found)).map((g) => ({ primary: g.primary, extras: g.extras }))
-        : groupIntoSessions(found).map((primary) => ({ primary, extras: [] }))
+        ? (await groupCodexSessions(found)).map((g) => ({ primary: g.primary, extras: g.extras, sessionKey: g.sessionKey }))
+        : groupIntoSessions(found).map((primary) => ({ primary, extras: [], sessionKey: null }))
 
     const ordered = await orderByAge(plans, opts.sinceDays)
     const selected = opts.limit ? ordered.slice(0, opts.limit) : ordered
@@ -117,7 +122,7 @@ async function uploadFiles(
       let result: UploadResult | null = null
       let error: string | undefined
       try {
-        result = await upload({ server: opts.server, token: opts.token, path, extras: plan.extras, format })
+        result = await upload({ server: opts.server, token: opts.token, path, extras: plan.extras, sessionKey: plan.sessionKey, format })
       } catch (err) {
         error = (err as Error).message
       }

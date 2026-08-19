@@ -134,11 +134,26 @@ Preview first with `--dry-run`. Scope with `--since <days>` and `--limit <n>`.
 ## How it works
 
 - **Claude Code**: Installs a [SessionEnd hook](https://docs.anthropic.com/en/docs/claude-code/plugins) that bundles the session transcript and POSTs it to your server.
-- **Codex**: Installs a `SessionEnd` hook in `~/.codex/config.toml` (auto-trusted via the `codex app-server` API). Because Codex clamps the hook to a few seconds, it hands the upload to a detached child so the session never blocks.
+- **Codex**: Installs a `SessionEnd` hook in `~/.codex/config.toml` (auto-trusted via the `codex app-server` API). Because Codex clamps the hook to a few seconds, it hands the upload to a detached child so the session never blocks. Codex fires `SessionEnd` only for the root thread, so the child folds in the session's sub-agent rollout files and uploads them as one bundle.
 - **OpenCode**: Registers a [plugin](https://opencode.ai/docs/plugins/) that listens for session idle events, reads session data from OpenCode's SQLite database, and uploads it.
 - **Pi**: Registers an [extension](https://docs.pi.new/extensions/) that triggers on `session_shutdown`, bundles the session JSONL file, and uploads it.
 
 All uploads are gzip-compressed and sent as multipart form-data to `/api/ingest/transcript` with Bearer token auth. Upload failures are non-fatal — they never block the coding agent.
+
+## Attribution
+
+Each upload is attributed to an account email, resolved at runtime:
+
+1. **`TUNELOOP_EMAIL`** environment variable, if set — the only override that works for a shared marketplace/managed install (the uploader can't bake a per-user address), and useful when your git `user.email` differs from your Tuneloop identity or a session runs outside a git repo.
+2. Otherwise, your git `user.email`.
+
+Set it once in your shell profile to override:
+
+```bash
+export TUNELOOP_EMAIL="you@yourcompany.com"
+```
+
+The per-repo commit/PR attribution (`gitAuthorEmail`) always comes from the session repo's git `user.email` and is unaffected by `TUNELOOP_EMAIL`.
 
 ## Requirements
 
