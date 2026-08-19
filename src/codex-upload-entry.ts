@@ -2,6 +2,7 @@ const TUNELOOP_SERVER = '__TUNELOOP_SERVER__'
 const TUNELOOP_TOKEN = '__TUNELOOP_TOKEN__'
 
 import { spawn } from 'node:child_process'
+import { codexSessionPlan } from './codex.js'
 import { decodeHookPayload, encodeHookPayload } from './detach.js'
 import { readHookPayload, upload, type HookPayload } from './upload.js'
 import { gitConfigEmail } from './git.js'
@@ -43,8 +44,21 @@ async function main(): Promise<void> {
   }
 
   // Transcript upload — best-effort and INDEPENDENT of the skills report below.
+  // Codex fires SessionEnd only for the root thread, so fold in its sub-agent
+  // rollout siblings here (same grouping backfill uses) — otherwise their spend
+  // and content are lost until a later backfill. Runs in the detached child, so
+  // the directory scan never contends with Codex's ~3s SessionEnd clamp.
   try {
-    await upload({ server: TUNELOOP_SERVER, token: TUNELOOP_TOKEN, hook, format: FORMAT })
+    const plan = await codexSessionPlan(hook.transcript_path)
+    await upload({
+      server: TUNELOOP_SERVER,
+      token: TUNELOOP_TOKEN,
+      path: plan.primary,
+      extras: plan.extras,
+      sessionKey: plan.sessionKey ?? hook.session_id ?? null,
+      hook,
+      format: FORMAT,
+    })
   } catch {
     /* transcript upload is best-effort */
   }

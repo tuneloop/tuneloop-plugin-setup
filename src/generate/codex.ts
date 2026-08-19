@@ -21,19 +21,18 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { codexHome } from '../codex.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const BEGIN = '# >>> tuneloop-upload (managed) — do not edit by hand'
 const END = '# <<< tuneloop-upload'
 
-/** Honors `CODEX_HOME`, the same override Codex itself reads. */
-export function codexHome(): string {
-  return process.env.CODEX_HOME ?? join(homedir(), '.codex')
-}
+// The installer and backfill share one Codex-home resolver (see ../codex.ts) so
+// a custom CODEX_HOME can never point them at different locations.
+export { codexHome }
 
 export function codexConfigPath(): string {
   return join(codexHome(), 'config.toml')

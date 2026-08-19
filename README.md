@@ -134,7 +134,7 @@ Preview first with `--dry-run`. Scope with `--since <days>` and `--limit <n>`.
 ## How it works
 
 - **Claude Code**: Installs a [SessionEnd hook](https://docs.anthropic.com/en/docs/claude-code/plugins) that bundles the session transcript and POSTs it to your server.
-- **Codex**: Installs a `SessionEnd` hook in `~/.codex/config.toml` (auto-trusted via the `codex app-server` API). Because Codex clamps the hook to a few seconds, it hands the upload to a detached child so the session never blocks.
+- **Codex**: Installs a `SessionEnd` hook in `~/.codex/config.toml` (auto-trusted via the `codex app-server` API). Because Codex clamps the hook to a few seconds, it hands the upload to a detached child so the session never blocks. Codex fires `SessionEnd` only for the root thread, so the child folds in the session's sub-agent rollout files and uploads them as one bundle.
 - **OpenCode**: Registers a [plugin](https://opencode.ai/docs/plugins/) that listens for session idle events, reads session data from OpenCode's SQLite database, and uploads it.
 - **Pi**: Registers an [extension](https://docs.pi.new/extensions/) that triggers on `session_shutdown`, bundles the session JSONL file, and uploads it.
 

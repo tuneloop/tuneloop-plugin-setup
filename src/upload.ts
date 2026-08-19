@@ -19,6 +19,9 @@ export interface UploadOptions {
   path?: string
   hook?: HookPayload
   extras?: string[]
+  /** Explicit session key. Backfill derives it from the transcript; the live
+   * hook supplies `hook.session_id`. Takes precedence over both. */
+  sessionKey?: string | null
   cwd?: string
   format?: string
   timeoutMs?: number
@@ -37,7 +40,10 @@ export async function upload(opts: UploadOptions): Promise<UploadResult> {
   const path = opts.path ?? opts.hook?.transcript_path
   if (!path) throw new Error('no transcript path — pass --path, or run this as a SessionEnd hook')
 
-  const bundle = await buildBundle(path, { sessionKey: opts.hook?.session_id ?? null, extras: opts.extras })
+  const bundle = await buildBundle(path, {
+    sessionKey: opts.sessionKey ?? opts.hook?.session_id ?? null,
+    extras: opts.extras,
+  })
   const body = Buffer.from(encodeBundle(bundle), 'utf8')
   if (bundle.files.every((f) => f.content.length === 0)) throw new Error(`transcript is empty: ${path}`)
 
