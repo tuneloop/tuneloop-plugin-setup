@@ -140,6 +140,21 @@ Preview first with `--dry-run`. Scope with `--since <days>` and `--limit <n>`.
 
 All uploads are gzip-compressed and sent as multipart form-data to `/api/ingest/transcript` with Bearer token auth. Upload failures are non-fatal — they never block the coding agent.
 
+## Attribution
+
+Each upload is attributed to an account email, resolved at runtime:
+
+1. **`TUNELOOP_EMAIL`** environment variable, if set — the only override that works for a shared marketplace/managed install (the uploader can't bake a per-user address), and useful when your git `user.email` differs from your Tuneloop identity or a session runs outside a git repo.
+2. Otherwise, your git `user.email`.
+
+Set it once in your shell profile to override:
+
+```bash
+export TUNELOOP_EMAIL="you@yourcompany.com"
+```
+
+The per-repo commit/PR attribution (`gitAuthorEmail`) always comes from the session repo's git `user.email` and is unaffected by `TUNELOOP_EMAIL`.
+
 ## Requirements
 
 - Node.js 22+

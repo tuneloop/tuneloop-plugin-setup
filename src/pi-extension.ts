@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { gzipSync } from 'node:zlib'
 import { basename, dirname, join, relative, sep } from 'node:path'
-import { gitConfigEmail, repoContext } from './git.js'
+import { accountEmail, gitConfigEmail, repoContext } from './git.js'
 import { machineId } from './machine-id.js'
 import { collectSkills, uploadSkills } from './skills.js'
 
@@ -107,7 +107,7 @@ async function send(body: Buffer, format: string, cwd: string | null, sessionKey
   const contentHash = createHash('sha256').update(body).digest('hex')
   const gz = gzipSync(body)
   const repo = await repoContext(cwd ?? undefined)
-  const email = (await gitConfigEmail()) ?? null
+  const email = await accountEmail()
   const gitAuthorEmail = (await gitConfigEmail(cwd ?? undefined)) ?? null
 
   const meta = {
@@ -167,7 +167,7 @@ export default function (pi: any): void {
 
     // Installed-skill inventory (Pi scope), independent + best-effort.
     try {
-      const email = (await gitConfigEmail()) ?? null
+      const email = await accountEmail()
       const locations = await collectSkills('pi', cwd ?? undefined)
       await uploadSkills(TUNELOOP_SERVER, TUNELOOP_TOKEN, email, locations)
     } catch {

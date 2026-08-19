@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { codexSessionPlan } from './codex.js'
 import { decodeHookPayload, encodeHookPayload } from './detach.js'
 import { readHookPayload, upload, type HookPayload } from './upload.js'
-import { gitConfigEmail } from './git.js'
+import { accountEmail } from './git.js'
 import { collectSkills, uploadSkills } from './skills.js'
 
 const FORMAT = 'codex-jsonl'
@@ -67,7 +67,7 @@ async function main(): Promise<void> {
   // transcript upload doesn't suppress it. Runs in the detached child, so it never
   // contends with Codex's ~3s hook clamp.
   try {
-    const email = (await gitConfigEmail()) ?? null
+    const email = await accountEmail()
     const locations = await collectSkills('codex', hook.cwd)
     await uploadSkills(TUNELOOP_SERVER, TUNELOOP_TOKEN, email, locations)
   } catch {

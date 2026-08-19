@@ -15,7 +15,7 @@ import { homedir } from 'node:os'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { Database } from 'bun:sqlite'
-import { gitConfigEmail, repoContext } from './git.js'
+import { accountEmail, gitConfigEmail, repoContext } from './git.js'
 import { machineId } from './machine-id.js'
 import { collectSkills, uploadSkills } from './skills.js'
 
@@ -25,7 +25,7 @@ async function send(body: Buffer, format: string, cwd: string | null, sessionKey
   const contentHash = createHash('sha256').update(body).digest('hex')
   const gz = gzipSync(body)
   const repo = await repoContext(cwd ?? undefined)
-  const email = (await gitConfigEmail()) ?? null
+  const email = await accountEmail()
   const gitAuthorEmail = (await gitConfigEmail(cwd ?? undefined)) ?? null
 
   const meta = {
@@ -110,7 +110,7 @@ async function uploadSession(sessionId: string): Promise<void> {
 
   // Installed-skill inventory (OpenCode scope), independent + best-effort.
   try {
-    const email = (await gitConfigEmail()) ?? null
+    const email = await accountEmail()
     const locations = await collectSkills('opencode', cwd ?? undefined)
     await uploadSkills(TUNELOOP_SERVER, TUNELOOP_TOKEN, email, locations)
   } catch {

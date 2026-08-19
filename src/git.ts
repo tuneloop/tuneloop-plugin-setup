@@ -20,6 +20,21 @@ export async function gitConfigEmail(cwd?: string): Promise<string | undefined> 
   return (await git(args)) ?? undefined
 }
 
+/**
+ * The email a session's uploads are attributed to (the account owner). An
+ * explicit `TUNELOOP_EMAIL` env var wins so a developer whose git `user.email`
+ * differs from their Tuneloop identity — or who works outside a git repo — can
+ * still be attributed; it's the only override that works for a shared
+ * marketplace/managed install, where the uploader can't bake a per-user address.
+ * Otherwise it falls back to git `user.email`. Distinct from the per-repo
+ * `gitAuthorEmail`, which stays git-derived for commit/PR attribution.
+ */
+export async function accountEmail(): Promise<string | null> {
+  const override = process.env.TUNELOOP_EMAIL?.trim()
+  if (override) return override
+  return (await gitConfigEmail()) ?? null
+}
+
 export interface RepoContext {
   remote: string | null
   branch: string | null

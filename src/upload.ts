@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import { buildBundle, cwdFromContent, encodeBundle, type SessionBundle } from './bundle.js'
 import { machineId } from './machine-id.js'
-import { gitConfigEmail, repoContext } from './git.js'
+import { accountEmail, gitConfigEmail, repoContext } from './git.js'
 
 export const CLIENT_VERSION = '0.1.0'
 
@@ -100,7 +100,7 @@ async function send(opts: SendOptions): Promise<UploadResult> {
   const gz = gzipSync(body)
 
   const repo = await repoContext(opts.cwd ?? undefined)
-  const email = (await gitConfigEmail()) ?? null
+  const email = await accountEmail()
   const gitAuthorEmail = (await gitConfigEmail(opts.cwd ?? undefined)) ?? null
 
   const meta = {

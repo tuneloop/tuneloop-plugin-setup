@@ -2,7 +2,7 @@ const TUNELOOP_SERVER = '__TUNELOOP_SERVER__'
 const TUNELOOP_TOKEN = '__TUNELOOP_TOKEN__'
 
 import { readHookPayload, upload } from './upload.js'
-import { gitConfigEmail } from './git.js'
+import { accountEmail } from './git.js'
 import { collectSkills, uploadSkills } from './skills.js'
 
 async function main(): Promise<void> {
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
   // Report the installed-skill inventory this session could invoke — independent,
   // so a failed transcript upload doesn't suppress it.
   try {
-    const email = (await gitConfigEmail()) ?? null
+    const email = await accountEmail()
     const locations = await collectSkills('claude-code', hook?.cwd)
     await uploadSkills(TUNELOOP_SERVER, TUNELOOP_TOKEN, email, locations)
   } catch {
