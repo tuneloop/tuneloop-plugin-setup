@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
-import { generateClaudeCode } from './generate/claude-code.js'
+import { generateClaudeCode, generateClaudeCodeMarketplace } from './generate/claude-code.js'
+import { generateCodex, generateCodexManaged, generateCodexMarketplace } from './generate/codex.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
 import { backfill, type SourceSummary } from './backfill.js'
@@ -44,9 +45,17 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
   Options:
     --server <url>     Tuneloop server URL (required)
     --token <token>    Ingest token (required)
-    --harness <name>   One of: claude-code, opencode, pi (required)
+    --harness <name>   One of: claude-code, codex, opencode, pi (required)
     -o <path>          Output path (default: current directory)
     --install          Copy to the harness's local plugin directory (opencode, pi)
+                       (codex always installs into ~/.codex directly)
+    --marketplace      (claude-code, codex) Emit an unpacked marketplace directory
+                       for plugin-install distribution instead of the default output
+    --managed          (codex) Emit admin artifacts for an enterprise managed
+                       deployment (allow_managed_hooks_only) instead of a local
+                       install. Writes the uploader + requirements.toml + README.
+    --managed-dir <p>       (codex --managed) Unix managed dir on endpoints
+    --managed-dir-windows <p>  (codex --managed) Windows managed dir on endpoints
     --backfill         Upload existing sessions that predate installation
     --since <days>     Backfill only sessions modified within N days
     --limit <n>        Cap number of sessions to backfill
@@ -67,7 +76,7 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
       --harness claude-code --backfill --dry-run
 `
 
-const HARNESSES = ['claude-code', 'opencode', 'pi'] as const
+const HARNESSES = ['claude-code', 'codex', 'opencode', 'pi'] as const
 type Harness = (typeof HARNESSES)[number]
 
 async function main(): Promise<number> {
@@ -106,6 +115,17 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
   const output = str(flags.o) ?? str(flags.output)
   const install = flags.install === true
 
+  // Codex has no drop-in plugin dir: it needs its config.toml edited and the
+  // hook trusted via the app-server RPC, so it always installs directly.
+  if (harness === 'codex') {
+    return runGenerateCodex(server, token, flags)
+  }
+
+  // Claude Code marketplace layout for `/plugin install` distribution.
+  if (harness === 'claude-code' && flags.marketplace === true) {
+    return runGenerateClaudeCodeMarketplace(server, token, flags)
+  }
+
   let result: string
 
   switch (harness) {
@@ -138,6 +158,113 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
     process.stdout.write('Installed to Pi extensions directory. Restart Pi to activate.\n')
   }
 
+  return 0
+}
+
+async function runGenerateClaudeCodeMarketplace(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  const outputDir = str(flags.o) ?? str(flags.output) ?? 'tuneloop-claude-code-marketplace'
+  const res = await generateClaudeCodeMarketplace({ server, token, outputDir: resolve(outputDir) })
+
+  process.stdout.write(`Generated marketplace in ${res.outputDir}:\n`)
+  process.stdout.write('  .claude-plugin/marketplace.json\n')
+  process.stdout.write('  tuneloop/   — the plugin (server URL + token baked in)\n')
+  process.stdout.write('\nTo distribute: commit this directory to a (private) git repo. Developers then run,\n')
+  process.stdout.write('inside Claude Code:\n')
+  process.stdout.write('  /plugin marketplace add <your-repo>\n')
+  process.stdout.write(`  /plugin install ${res.pluginRef}\n`)
+  process.stdout.write('\nOr test locally now:\n')
+  process.stdout.write(`  claude plugin marketplace add ${res.outputDir} --scope user\n`)
+  process.stdout.write(`  claude plugin install ${res.pluginRef} --scope user\n`)
+  return 0
+}
+
+async function runGenerateCodex(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  if (flags.managed === true) {
+    return runGenerateCodexManaged(server, token, flags)
+  }
+  if (flags.marketplace === true) {
+    return runGenerateCodexMarketplace(server, token, flags)
+  }
+
+  const res = await generateCodex({ server, token })
+
+  if (!res.present) {
+    process.stderr.write('Codex not found on this machine (no ~/.codex directory). Nothing installed.\n')
+    return 1
+  }
+
+  process.stdout.write(`Installed uploader: ${res.uploaderPath}\n`)
+  process.stdout.write(`Hooked SessionEnd in: ${res.configPath}\n`)
+
+  if (res.alreadyTrusted) {
+    process.stdout.write('Already installed and trusted — nothing changed.\n')
+  } else if (res.trusted) {
+    process.stdout.write('Hook is trusted and will fire when your next Codex session ends.\n')
+  } else if (res.needsManualTrust) {
+    process.stdout.write('\nCodex could not auto-trust the hook. Trust it once, manually:\n')
+    process.stdout.write('  start Codex, run  /hooks , and approve the tuneloop SessionEnd hook.\n')
+  }
+
+  return 0
+}
+
+// Default managed directories. Codex documents no default (the admin sets
+// managed_dir / windows_managed_dir), so these are sensible starting points
+// co-located with the managed requirements.toml; override per fleet.
+const DEFAULT_MANAGED_DIR = '/etc/codex/hooks'
+const DEFAULT_WINDOWS_MANAGED_DIR = 'C:\\ProgramData\\OpenAI\\Codex\\hooks'
+
+async function runGenerateCodexMarketplace(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  const outputDir = str(flags.o) ?? str(flags.output) ?? 'tuneloop-codex-marketplace'
+  const res = await generateCodexMarketplace({ server, token, outputDir: resolve(outputDir) })
+
+  process.stdout.write(`Generated Codex marketplace in ${res.outputDir}:\n`)
+  process.stdout.write('  .agents/plugins/marketplace.json\n')
+  process.stdout.write(`  plugins/tuneloop/   — the plugin (server URL + token baked in)\n`)
+  process.stdout.write('\nTo distribute: commit this directory to a (private) git repo. Developers then run:\n')
+  process.stdout.write('  codex plugin marketplace add <your-repo>\n')
+  process.stdout.write(`  codex plugin add ${res.pluginRef}\n`)
+  process.stdout.write('then trust the hook once inside Codex with /hooks (plugin hooks are not auto-trusted).\n')
+  process.stdout.write('\nOr test locally now:\n')
+  process.stdout.write(`  codex plugin marketplace add ${res.outputDir}\n`)
+  process.stdout.write(`  codex plugin add ${res.pluginRef}\n`)
+  return 0
+}
+
+async function runGenerateCodexManaged(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  const outputDir = str(flags.o) ?? str(flags.output) ?? 'tuneloop-codex-managed'
+  const managedDir = str(flags['managed-dir']) ?? DEFAULT_MANAGED_DIR
+  const windowsManagedDir = str(flags['managed-dir-windows']) ?? DEFAULT_WINDOWS_MANAGED_DIR
+
+  const res = await generateCodexManaged({
+    server,
+    token,
+    outputDir: resolve(outputDir),
+    managedDir,
+    windowsManagedDir,
+  })
+
+  process.stdout.write(`Generated managed Codex artifacts in ${res.outputDir}:\n`)
+  process.stdout.write(`  ${res.scriptPath.split('/').pop()}        — uploader (deploy to ${res.managedDir})\n`)
+  process.stdout.write('  requirements.toml   — merge into your managed config\n')
+  process.stdout.write('  README-admin.md     — deployment steps\n')
+  process.stdout.write('\nDistribute both files via your MDM. See README-admin.md for the exact paths.\n')
   return 0
 }
 

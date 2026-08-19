@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import { buildBundle, cwdFromContent, encodeBundle, type SessionBundle } from './bundle.js'
 import { machineId } from './machine-id.js'
-import { gitConfigEmail, repoContext } from './git.js'
+import { accountEmail, gitConfigEmail, repoContext } from './git.js'
 
 export const CLIENT_VERSION = '0.1.0'
 
@@ -19,6 +19,9 @@ export interface UploadOptions {
   path?: string
   hook?: HookPayload
   extras?: string[]
+  /** Explicit session key. Backfill derives it from the transcript; the live
+   * hook supplies `hook.session_id`. Takes precedence over both. */
+  sessionKey?: string | null
   cwd?: string
   format?: string
   timeoutMs?: number
@@ -37,7 +40,10 @@ export async function upload(opts: UploadOptions): Promise<UploadResult> {
   const path = opts.path ?? opts.hook?.transcript_path
   if (!path) throw new Error('no transcript path — pass --path, or run this as a SessionEnd hook')
 
-  const bundle = await buildBundle(path, { sessionKey: opts.hook?.session_id ?? null, extras: opts.extras })
+  const bundle = await buildBundle(path, {
+    sessionKey: opts.sessionKey ?? opts.hook?.session_id ?? null,
+    extras: opts.extras,
+  })
   const body = Buffer.from(encodeBundle(bundle), 'utf8')
   if (bundle.files.every((f) => f.content.length === 0)) throw new Error(`transcript is empty: ${path}`)
 
@@ -94,7 +100,7 @@ async function send(opts: SendOptions): Promise<UploadResult> {
   const gz = gzipSync(body)
 
   const repo = await repoContext(opts.cwd ?? undefined)
-  const email = (await gitConfigEmail()) ?? null
+  const email = await accountEmail()
   const gitAuthorEmail = (await gitConfigEmail(opts.cwd ?? undefined)) ?? null
 
   const meta = {
@@ -108,6 +114,8 @@ async function send(opts: SendOptions): Promise<UploadResult> {
     repo: repo.repo,
     gitAuthorEmail,
     gitToplevel: repo.toplevel,
+    // Checkout roots, so the server can map a file edited outside gitToplevel.
+    gitWorktrees: repo.worktrees,
     cwd: opts.cwd,
     sourcePath: opts.sourcePath,
     sessionKey: opts.sessionKey ?? null,
