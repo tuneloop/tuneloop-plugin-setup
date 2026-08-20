@@ -34,7 +34,7 @@ SCRIPT="$WORK/plugin/bin/tuneloop-cursor-hook.mjs"
 [ -f "$SCRIPT" ] || { echo "zip missing bin script"; exit 1; }
 # The zip must carry the manifest and a valid hooks config.
 node -e "JSON.parse(require('fs').readFileSync('$WORK/plugin/.cursor-plugin/plugin.json'))"
-node -e "const h=JSON.parse(require('fs').readFileSync('$WORK/plugin/hooks/hooks.json')); if(h.version!==1||Object.keys(h.hooks).length!==14) throw new Error('bad hooks.json')"
+node -e "const h=JSON.parse(require('fs').readFileSync('$WORK/plugin/hooks/hooks.json')); if(h.version!==1||Object.keys(h.hooks).length!==12) throw new Error('bad hooks.json')"
 
 echo "== start capture server =="
 PORT=$PORT SAVE_UPLOADS_TO="$WORK/uploads" node test-server.js >"$WORK/server.log" 2>&1 &

@@ -11,15 +11,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
  * redundant. Validated against Cursor's own hook-type list: ONE unknown name
  * makes Cursor silently reject the ENTIRE config and load zero hooks, so this
  * list must only ever contain names from the validator's registry.
+ *
+ * Deliberately absent (review decision):
+ * - `afterAgentThought` — thinking blocks are viewer-only across every
+ *   harness (no processor or enrichment consumes them), and thoughts were the
+ *   single biggest event class (they double-fire). Intra-turn narrative still
+ *   arrives via the transcript sidecar.
+ * - `beforeReadFile` — read contents feed no processor (PR/Jira/error
+ *   extraction all read shell/MCP outputs and failure text, which postToolUse
+ *   and postToolUseFailure carry), skill DETECTION rides the SKILL.md path on
+ *   the ordinary Read, and skill bodies come from env capture. Dropping it
+ *   removes the largest privacy payload.
+ * The server parser still understands both events — an older or fuller
+ * capture stays parseable.
  */
 const HOOK_EVENTS = [
   'beforeSubmitPrompt',
-  'afterAgentThought',
   'afterAgentResponse',
   'preToolUse',
   'postToolUse',
   'postToolUseFailure',
-  'beforeReadFile',
   'afterFileEdit',
   'afterMCPExecution',
   'subagentStart',
