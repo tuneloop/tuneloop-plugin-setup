@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -147,4 +148,86 @@ async function install(script: string): Promise<string> {
   await mkdir(dirname(hooksPath), { recursive: true })
   await writeFile(hooksPath, JSON.stringify(config, null, 2) + '\n', 'utf8')
   return hooksPath
+}
+
+/* ---------------------------------------------------------------------------
+ * Marketplace mode (`--marketplace`) — the layout Cursor's Plugins UI `+ Add`
+ * actually accepts. `+ Add` takes neither a zip nor a bare plugin folder; it
+ * registers a MARKETPLACE: a directory whose `.cursor-plugin/marketplace.json`
+ * lists plugins by relative `source` (Cursor also reads Claude Code's
+ * `.claude-plugin/` spelling, so one repo can serve both harnesses).
+ *
+ * One hard requirement, discovered live: Cursor resolves a marketplace with
+ * `git ls-remote` — even a LOCAL directory must be a git repo with a commit,
+ * or the plugin registers but fails at load with "Failed to resolve git ref
+ * HEAD". Installs pin to the marketplace's commit (materialized under
+ * `~/.cursor/plugins/cache/<marketplace>/<plugin>/<sha>/`), so updates ship by
+ * committing. The generator therefore leaves the directory git-ready: init +
+ * initial commit when git is available, an instruction otherwise.
+ * ------------------------------------------------------------------------- */
+
+const MARKETPLACE_JSON = JSON.stringify(
+  {
+    name: 'tuneloop',
+    owner: { name: 'Tuneloop' },
+    description: 'Tuneloop session-transcript upload plugin.',
+    plugins: [
+      {
+        name: 'tuneloop',
+        source: './tuneloop',
+        description: 'Captures Cursor sessions via hooks and uploads them to your Tuneloop server when a conversation goes idle.',
+      },
+    ],
+  },
+  null,
+  2,
+)
+
+/**
+ *   <outputDir>/
+ *   ├── .cursor-plugin/marketplace.json
+ *   └── tuneloop/                        (the plugin itself)
+ *       ├── .cursor-plugin/plugin.json
+ *       ├── hooks/hooks.json
+ *       └── bin/tuneloop-cursor-hook.mjs
+ */
+export async function generateCursorMarketplace(opts: {
+  server: string
+  token: string
+  outputDir: string
+}): Promise<{ outputDir: string; gitReady: boolean }> {
+  await mkdir(join(opts.outputDir, '.cursor-plugin'), { recursive: true })
+  await writeFile(join(opts.outputDir, '.cursor-plugin', 'marketplace.json'), MARKETPLACE_JSON)
+
+  const script = await bakedScript(opts.server, opts.token)
+  const pluginRoot = join(opts.outputDir, 'tuneloop')
+  const files: Array<[string, string]> = [
+    ['.cursor-plugin/plugin.json', PLUGIN_JSON],
+    // eslint-disable-next-line no-template-curly-in-string
+    ['hooks/hooks.json', hooksJson((e) => `node "\${CURSOR_PLUGIN_ROOT}/bin/tuneloop-cursor-hook.mjs" ${e}`)],
+    ['bin/tuneloop-cursor-hook.mjs', script],
+  ]
+  for (const [rel, data] of files) {
+    const dest = join(pluginRoot, rel)
+    await mkdir(dirname(dest), { recursive: true })
+    await writeFile(dest, data)
+  }
+
+  return { outputDir: opts.outputDir, gitReady: await gitInitCommit(opts.outputDir) }
+}
+
+/** Best-effort: make the marketplace loadable by Cursor's git resolution.
+ *  A re-run over an existing repo commits the regenerated files; "nothing to
+ *  commit" is fine as long as HEAD exists. */
+async function gitInitCommit(dir: string): Promise<boolean> {
+  const git = (args: string[]) =>
+    new Promise<boolean>((res) => execFile('git', args, { cwd: dir }, (err) => res(!err)))
+  if (!(await git(['init', '-q']))) return false
+  await git(['add', '-A'])
+  await git([
+    '-c', 'user.name=Tuneloop',
+    '-c', 'user.email=plugin-setup@tuneloop.local',
+    'commit', '-q', '-m', 'tuneloop plugin marketplace',
+  ])
+  return git(['rev-parse', '--verify', 'HEAD'])
 }

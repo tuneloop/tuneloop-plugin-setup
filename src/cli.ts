@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { generateClaudeCode, generateClaudeCodeMarketplace } from './generate/claude-code.js'
 import { generateCodex, generateCodexManaged, generateCodexMarketplace } from './generate/codex.js'
-import { generateCursor } from './generate/cursor.js'
+import { generateCursor, generateCursorMarketplace } from './generate/cursor.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
 import { backfill, type SourceSummary } from './backfill.js'
@@ -50,8 +50,9 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
     -o <path>          Output path (default: current directory)
     --install          Copy to the harness's local plugin directory (opencode, pi)
                        (codex always installs into ~/.codex directly)
-    --marketplace      (claude-code, codex) Emit an unpacked marketplace directory
-                       for plugin-install distribution instead of the default output
+    --marketplace      (claude-code, codex, cursor) Emit an unpacked marketplace
+                       directory for plugin-install distribution instead of the
+                       default output
     --managed          (codex) Emit admin artifacts for an enterprise managed
                        deployment (allow_managed_hooks_only) instead of a local
                        install. Writes the uploader + requirements.toml + README.
@@ -134,6 +135,12 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
     return runGenerateClaudeCodeMarketplace(server, token, flags)
   }
 
+  // Cursor marketplace layout for the Plugins UI's `+ Add` (a git-shaped
+  // directory — Cursor loads even a local marketplace via git).
+  if (harness === 'cursor' && flags.marketplace === true) {
+    return runGenerateCursorMarketplace(server, token, flags)
+  }
+
   let result: string
 
   switch (harness) {
@@ -201,6 +208,31 @@ async function runGenerateClaudeCodeMarketplace(
   process.stdout.write('\nOr test locally now:\n')
   process.stdout.write(`  claude plugin marketplace add ${res.outputDir} --scope user\n`)
   process.stdout.write(`  claude plugin install ${res.pluginRef} --scope user\n`)
+  return 0
+}
+
+async function runGenerateCursorMarketplace(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  const outputDir = str(flags.o) ?? str(flags.output) ?? 'tuneloop-cursor-marketplace'
+  const res = await generateCursorMarketplace({ server, token, outputDir: resolve(outputDir) })
+
+  process.stdout.write(`Generated marketplace in ${res.outputDir}:\n`)
+  process.stdout.write('  .cursor-plugin/marketplace.json\n')
+  process.stdout.write('  tuneloop/   — the plugin (server URL + token baked in)\n')
+  if (res.gitReady) {
+    process.stdout.write('  (initialized as a git repo — Cursor loads marketplaces via git, even local ones)\n')
+  } else {
+    process.stdout.write('\nWARNING: could not git-init the directory. Cursor resolves a marketplace via\n')
+    process.stdout.write('git even for a local path — run `git init && git add -A && git commit` inside\n')
+    process.stdout.write('it or the plugin will fail to load after install.\n')
+  }
+  process.stdout.write('\nTo distribute: push this directory to a (private) git repo. Developers then, in\n')
+  process.stdout.write('Cursor: Plugins panel -> + Add -> the repo URL -> Install "tuneloop".\n')
+  process.stdout.write(`\nOr test locally now: Plugins panel -> + Add -> ${res.outputDir}\n`)
+  process.stdout.write('\nUpdates ship by committing: installs pin to the marketplace’s commit.\n')
   return 0
 }
 
