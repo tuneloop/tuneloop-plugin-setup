@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import { buildBundle, cwdFromContent, encodeBundle, type SessionBundle } from './bundle.js'
 import { machineId } from './machine-id.js'
-import { accountEmail, gitConfigEmail, repoContext } from './git.js'
+import { gitConfigEmail, repoContext } from './git.js'
 
 export const CLIENT_VERSION = '0.1.0'
 
@@ -67,6 +67,8 @@ export async function uploadBundle(opts: {
   format: string
   sourcePath: string
   cwd?: string
+  /** Overrides the git-config email — Cursor hooks carry the account email. */
+  userEmail?: string
   timeoutMs?: number
 }): Promise<UploadResult> {
   return send({
@@ -78,6 +80,7 @@ export async function uploadBundle(opts: {
     cwd: opts.cwd ?? null,
     sessionKey: opts.bundle.sessionKey,
     fileCount: opts.bundle.files.length,
+    userEmail: opts.userEmail,
     timeoutMs: opts.timeoutMs,
   })
 }
@@ -91,6 +94,7 @@ interface SendOptions {
   cwd: string | null
   sessionKey?: string | null
   fileCount?: number
+  userEmail?: string
   timeoutMs?: number
 }
 
@@ -100,7 +104,10 @@ async function send(opts: SendOptions): Promise<UploadResult> {
   const gz = gzipSync(body)
 
   const repo = await repoContext(opts.cwd ?? undefined)
-  const email = await accountEmail()
+  // Identity chain, strongest signal first: the explicit TUNELOOP_EMAIL
+  // override → the harness's own account email when it knows one (Cursor's
+  // hook payloads carry the logged-in account) → the git-config guess.
+  const email = process.env.TUNELOOP_EMAIL?.trim() || opts.userEmail || (await gitConfigEmail()) || null
   const gitAuthorEmail = (await gitConfigEmail(opts.cwd ?? undefined)) ?? null
 
   const meta = {

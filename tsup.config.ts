@@ -34,6 +34,19 @@ export default defineConfig([
     banner: { js: '#!/usr/bin/env node' },
     removeNodeProtocol: false,
   },
+  {
+    // The Cursor hook entry — bundled standalone; the generator bakes the
+    // server/token placeholders into a copy of this artifact.
+    entry: { 'cursor-hook-entry': 'src/generate/cursor-hook-entry.ts' },
+    format: ['esm'],
+    target: 'node22',
+    platform: 'node',
+    clean: false,
+    dts: false,
+    sourcemap: false,
+    banner: { js: '#!/usr/bin/env node' },
+    removeNodeProtocol: false,
+  },
   // OpenCode plugin + Pi extension: single self-contained modules (no shebang —
   // they're loaded by the harness, not executed). `bun:sqlite` stays external
   // (Bun provides it at runtime); node builtins keep their `node:` prefix.

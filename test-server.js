@@ -53,6 +53,23 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // E2E support: persist the decompressed bundle + meta so a downstream
+    // parser test can consume exactly what a real server would have received.
+    if (process.env.SAVE_UPLOADS_TO && transcriptSize > 0) {
+      const { writeFileSync, mkdirSync } = await import('node:fs')
+      const dir = process.env.SAVE_UPLOADS_TO
+      mkdirSync(dir, { recursive: true })
+      const stamp = Date.now()
+      for (const part of parts) {
+        const [headerBlock, ...rest] = part.split('\r\n\r\n')
+        const content = rest.join('\r\n\r\n').replace(/\r\n$/, '')
+        if (headerBlock.includes('name="transcript"')) {
+          writeFileSync(`${dir}/bundle-${stamp}.json`, gunzipSync(Buffer.from(content, 'latin1')))
+        }
+      }
+      writeFileSync(`${dir}/meta-${stamp}.json`, JSON.stringify(meta, null, 2))
+    }
+
     const timestamp = new Date().toISOString()
     console.log('\n' + '='.repeat(70))
     console.log(`UPLOAD RECEIVED at ${timestamp}`)
@@ -74,7 +91,8 @@ const server = createServer(async (req, res) => {
   }
 })
 
-server.listen(9919, () => {
-  console.log('Tuneloop mock server listening on http://localhost:9919')
+const PORT = Number.parseInt(process.env.PORT ?? '', 10) || 9919
+server.listen(PORT, () => {
+  console.log(`Tuneloop mock server listening on http://localhost:${PORT}`)
   console.log('Waiting for uploads...\n')
 })

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { generateClaudeCode, generateClaudeCodeMarketplace } from './generate/claude-code.js'
 import { generateCodex, generateCodexManaged, generateCodexMarketplace } from './generate/codex.js'
+import { generateCursor, generateCursorMarketplace } from './generate/cursor.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
 import { backfill, type SourceSummary } from './backfill.js'
@@ -45,12 +46,13 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
   Options:
     --server <url>     Tuneloop server URL (required)
     --token <token>    Ingest token (required)
-    --harness <name>   One of: claude-code, codex, opencode, pi (required)
+    --harness <name>   One of: claude-code, codex, cursor, opencode, pi (required)
     -o <path>          Output path (default: current directory)
     --install          Copy to the harness's local plugin directory (opencode, pi)
                        (codex always installs into ~/.codex directly)
-    --marketplace      (claude-code, codex) Emit an unpacked marketplace directory
-                       for plugin-install distribution instead of the default output
+    --marketplace      (claude-code, codex, cursor) Emit an unpacked marketplace
+                       directory for plugin-install distribution instead of the
+                       default output
     --managed          (codex) Emit admin artifacts for an enterprise managed
                        deployment (allow_managed_hooks_only) instead of a local
                        install. Writes the uploader + requirements.toml + README.
@@ -76,7 +78,7 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
       --harness claude-code --backfill --dry-run
 `
 
-const HARNESSES = ['claude-code', 'codex', 'opencode', 'pi'] as const
+const HARNESSES = ['claude-code', 'codex', 'cursor', 'opencode', 'pi'] as const
 type Harness = (typeof HARNESSES)[number]
 
 async function main(): Promise<number> {
@@ -105,6 +107,13 @@ async function main(): Promise<number> {
   const serverUrl = server.replace(/\/+$/, '')
 
   if (flags.backfill) {
+    if (harness === 'cursor') {
+      // Deliberate, not a TODO: Cursor's primary data (tokens, thinking, tool
+      // outcomes) exists only while hooks observe it — there is no historical
+      // corpus to sweep. Coverage starts at install.
+      process.stderr.write('Backfill is not supported for cursor: sessions are captured live via hooks,\nso coverage starts when the plugin is installed.\n')
+      return 1
+    }
     return runBackfill(serverUrl, token, harness, flags)
   }
 
@@ -126,6 +135,12 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
     return runGenerateClaudeCodeMarketplace(server, token, flags)
   }
 
+  // Cursor marketplace layout for the Plugins UI's `+ Add` (a git-shaped
+  // directory — Cursor loads even a local marketplace via git).
+  if (harness === 'cursor' && flags.marketplace === true) {
+    return runGenerateCursorMarketplace(server, token, flags)
+  }
+
   let result: string
 
   switch (harness) {
@@ -144,6 +159,11 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
       result = await generatePi({ server, token, output: resolve(out), install })
       break
     }
+    case 'cursor': {
+      const out = output ?? 'tuneloop-cursor.zip'
+      result = await generateCursor({ server, token, output: resolve(out), install })
+      break
+    }
   }
 
   process.stdout.write(`Generated: ${result}\n`)
@@ -156,6 +176,15 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
     process.stdout.write('Installed to OpenCode plugins directory. Restart OpenCode to activate.\n')
   } else if (harness === 'pi' && install) {
     process.stdout.write('Installed to Pi extensions directory. Restart Pi to activate.\n')
+  } else if (harness === 'cursor') {
+    if (install) {
+      process.stdout.write('Hooks merged into ~/.cursor/hooks.json (Cursor hot-reloads; no restart needed).\n')
+      process.stdout.write('Verify: the newest cursor.hooks.*.log under Cursor\'s logs must say "Loaded N hook(s)" —\n')
+      process.stdout.write('one invalid hook name silently disables ALL hooks.\n')
+    } else {
+      process.stdout.write('\nInstall the zip as a Cursor plugin (org marketplace or local), or re-run with --install\n')
+      process.stdout.write('to register the hooks directly in ~/.cursor/hooks.json.\n')
+    }
   }
 
   return 0
@@ -179,6 +208,39 @@ async function runGenerateClaudeCodeMarketplace(
   process.stdout.write('\nOr test locally now:\n')
   process.stdout.write(`  claude plugin marketplace add ${res.outputDir} --scope user\n`)
   process.stdout.write(`  claude plugin install ${res.pluginRef} --scope user\n`)
+  return 0
+}
+
+async function runGenerateCursorMarketplace(
+  server: string,
+  token: string,
+  flags: Record<string, string | boolean>,
+): Promise<number> {
+  const outputDir = str(flags.o) ?? str(flags.output) ?? 'tuneloop-cursor-marketplace'
+  const res = await generateCursorMarketplace({ server, token, outputDir: resolve(outputDir) })
+
+  process.stdout.write(`Generated marketplace in ${res.outputDir}:\n`)
+  process.stdout.write('  .cursor-plugin/marketplace.json\n')
+  process.stdout.write('  tuneloop/   — the plugin (server URL + token baked in)\n')
+  if (res.git === 'initialized') {
+    process.stdout.write('  (initialized as a git repo — Cursor loads marketplaces via git, even local ones)\n')
+  } else if (res.git === 'inside-existing-repo') {
+    process.stdout.write('\nNOTE: this directory sits inside an existing git repo, so it was left alone\n')
+    process.stdout.write('(a nested `git init` would make the outer repo silently stop tracking it).\n')
+    process.stdout.write('Cursor loads a marketplace via git from a repo whose ROOT holds\n')
+    process.stdout.write('.cursor-plugin/marketplace.json — commit these files and push them to their\n')
+    process.stdout.write('own repo (or regenerate to a standalone path for a local + Add test).\n')
+  } else {
+    process.stdout.write('\nWARNING: could not git-init the directory (is git installed?). Cursor resolves\n')
+    process.stdout.write('a marketplace via git even for a local path — run `git init && git add -A &&\n')
+    process.stdout.write('git commit` inside it or the plugin will fail to load after install.\n')
+  }
+  process.stdout.write('\nTo distribute: push this directory to a (private) git repo. Developers then, in\n')
+  process.stdout.write('Cursor: Plugins panel -> + Add -> the repo URL -> Install "tuneloop".\n')
+  if (res.git === 'initialized') {
+    process.stdout.write(`\nOr test locally now: Plugins panel -> + Add -> ${res.outputDir}\n`)
+  }
+  process.stdout.write('\nUpdates ship by committing: installs pin to the marketplace’s commit.\n')
   return 0
 }
 
