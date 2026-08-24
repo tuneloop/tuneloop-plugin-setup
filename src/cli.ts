@@ -222,16 +222,24 @@ async function runGenerateCursorMarketplace(
   process.stdout.write(`Generated marketplace in ${res.outputDir}:\n`)
   process.stdout.write('  .cursor-plugin/marketplace.json\n')
   process.stdout.write('  tuneloop/   — the plugin (server URL + token baked in)\n')
-  if (res.gitReady) {
+  if (res.git === 'initialized') {
     process.stdout.write('  (initialized as a git repo — Cursor loads marketplaces via git, even local ones)\n')
+  } else if (res.git === 'inside-existing-repo') {
+    process.stdout.write('\nNOTE: this directory sits inside an existing git repo, so it was left alone\n')
+    process.stdout.write('(a nested `git init` would make the outer repo silently stop tracking it).\n')
+    process.stdout.write('Cursor loads a marketplace via git from a repo whose ROOT holds\n')
+    process.stdout.write('.cursor-plugin/marketplace.json — commit these files and push them to their\n')
+    process.stdout.write('own repo (or regenerate to a standalone path for a local + Add test).\n')
   } else {
-    process.stdout.write('\nWARNING: could not git-init the directory. Cursor resolves a marketplace via\n')
-    process.stdout.write('git even for a local path — run `git init && git add -A && git commit` inside\n')
-    process.stdout.write('it or the plugin will fail to load after install.\n')
+    process.stdout.write('\nWARNING: could not git-init the directory (is git installed?). Cursor resolves\n')
+    process.stdout.write('a marketplace via git even for a local path — run `git init && git add -A &&\n')
+    process.stdout.write('git commit` inside it or the plugin will fail to load after install.\n')
   }
   process.stdout.write('\nTo distribute: push this directory to a (private) git repo. Developers then, in\n')
   process.stdout.write('Cursor: Plugins panel -> + Add -> the repo URL -> Install "tuneloop".\n')
-  process.stdout.write(`\nOr test locally now: Plugins panel -> + Add -> ${res.outputDir}\n`)
+  if (res.git === 'initialized') {
+    process.stdout.write(`\nOr test locally now: Plugins panel -> + Add -> ${res.outputDir}\n`)
+  }
   process.stdout.write('\nUpdates ship by committing: installs pin to the marketplace’s commit.\n')
   return 0
 }

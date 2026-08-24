@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -195,7 +195,7 @@ export async function generateCursorMarketplace(opts: {
   server: string
   token: string
   outputDir: string
-}): Promise<{ outputDir: string; gitReady: boolean }> {
+}): Promise<{ outputDir: string; git: MarketplaceGitState }> {
   await mkdir(join(opts.outputDir, '.cursor-plugin'), { recursive: true })
   await writeFile(join(opts.outputDir, '.cursor-plugin', 'marketplace.json'), MARKETPLACE_JSON)
 
@@ -213,21 +213,35 @@ export async function generateCursorMarketplace(opts: {
     await writeFile(dest, data)
   }
 
-  return { outputDir: opts.outputDir, gitReady: await gitInitCommit(opts.outputDir) }
+  return { outputDir: opts.outputDir, git: await gitInitCommit(opts.outputDir) }
 }
 
-/** Best-effort: make the marketplace loadable by Cursor's git resolution.
- *  A re-run over an existing repo commits the regenerated files; "nothing to
- *  commit" is fine as long as HEAD exists. */
-async function gitInitCommit(dir: string): Promise<boolean> {
+export type MarketplaceGitState = 'initialized' | 'inside-existing-repo' | 'unavailable'
+
+/**
+ * Best-effort: make the marketplace loadable by Cursor's git resolution.
+ *
+ * Never `git init` inside someone's EXISTING repo: a nested repo makes the
+ * outer one silently stop tracking this whole subtree — the admin commits,
+ * pushes, and the marketplace files quietly aren't in the push. In that case
+ * committing is the admin's call (the CLI prints the requirement instead).
+ * A repo rooted AT the output dir is ours from a previous run, so a re-run
+ * recommits the regenerated files; "nothing to commit" is fine as long as
+ * HEAD exists.
+ */
+async function gitInitCommit(dir: string): Promise<MarketplaceGitState> {
   const git = (args: string[]) =>
-    new Promise<boolean>((res) => execFile('git', args, { cwd: dir }, (err) => res(!err)))
-  if (!(await git(['init', '-q']))) return false
+    new Promise<string | null>((res) =>
+      execFile('git', args, { cwd: dir }, (err, stdout) => res(err ? null : String(stdout).trim())),
+    )
+  const toplevel = await git(['rev-parse', '--show-toplevel'])
+  if (toplevel && (await realpath(toplevel)) !== (await realpath(dir))) return 'inside-existing-repo'
+  if ((await git(['init', '-q'])) === null) return 'unavailable'
   await git(['add', '-A'])
   await git([
     '-c', 'user.name=Tuneloop',
     '-c', 'user.email=plugin-setup@tuneloop.local',
     'commit', '-q', '-m', 'tuneloop plugin marketplace',
   ])
-  return git(['rev-parse', '--verify', 'HEAD'])
+  return (await git(['rev-parse', '--verify', 'HEAD'])) !== null ? 'initialized' : 'unavailable'
 }
