@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { generateClaudeCode, generateClaudeCodeMarketplace } from './generate/claude-code.js'
+import { generateClaudeCode, generateClaudeCodeMarketplace, installClaudeCode } from './generate/claude-code.js'
 import { generateCodex, generateCodexManaged, generateCodexMarketplace } from './generate/codex.js'
 import { generateOpencode } from './generate/opencode.js'
 import { generatePi } from './generate/pi.js'
@@ -47,7 +47,8 @@ const USAGE = `tuneloop-plugin-setup ${CLIENT_VERSION}
     --token <token>    Ingest token (required)
     --harness <name>   One of: claude-code, codex, opencode, pi (required)
     -o <path>          Output path (default: current directory)
-    --install          Copy to the harness's local plugin directory (opencode, pi)
+    --install          Install directly: merge hooks into settings.json (claude-code)
+                       or copy to the harness's plugin directory (opencode, pi)
                        (codex always installs into ~/.codex directly)
     --marketplace      (claude-code, codex) Emit an unpacked marketplace directory
                        for plugin-install distribution instead of the default output
@@ -124,6 +125,16 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
   // Claude Code marketplace layout for `/plugin install` distribution.
   if (harness === 'claude-code' && flags.marketplace === true) {
     return runGenerateClaudeCodeMarketplace(server, token, flags)
+  }
+
+  // Claude Code settings-level install — the config-management path
+  // (one file to push, no marketplace; see installClaudeCode).
+  if (harness === 'claude-code' && install) {
+    const res = await installClaudeCode({ server, token })
+    process.stdout.write(`Installed scripts to ${res.binDir}\n`)
+    process.stdout.write(`Merged hooks into ${res.settingsPath}\n`)
+    process.stdout.write('Sessions capture from the next launch (no restart needed for new sessions).\n')
+    return 0
   }
 
   let result: string

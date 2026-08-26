@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { writeFile, mkdir } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createZip } from '../zip.js'
@@ -151,4 +152,66 @@ export async function generateClaudeCodeMarketplace(opts: {
   }
 
   return { outputDir: opts.outputDir, marketplaceName: 'tuneloop', pluginRef: 'tuneloop@tuneloop' }
+}
+
+/* ---------------------------------------------------------------------------
+ * `--install`: the settings-level path — an alternative to the plugin for
+ * teams that manage developer machines through settings.json (config
+ * management can push one file; no marketplace, no plugin UI). Writes the
+ * scripts under ~/.tuneloop/claude-code/bin and merges the three hooks into
+ * the user-level settings.json with absolute paths. Functionally identical
+ * to the plugin: same scripts, same capture, same upload.
+ *
+ * Merge policy: back up first, refuse to touch a file we cannot parse, and
+ * never disturb entries that are not ours (ours are recognizable by the
+ * script path).
+ * ------------------------------------------------------------------------- */
+
+function settingsPath(): string {
+  const override = process.env.TUNELOOP_CLAUDE_SETTINGS
+  if (override) return override
+  const configDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+  return join(configDir, 'settings.json')
+}
+
+export async function installClaudeCode(opts: { server: string; token: string }): Promise<{ settingsPath: string; binDir: string }> {
+  const binDir = join(homedir(), '.tuneloop', 'claude-code', 'bin')
+  await mkdir(binDir, { recursive: true })
+  const uploadPath = join(binDir, 'tuneloop-upload.mjs')
+  const shellEditPath = join(binDir, 'tuneloop-shell-edit.mjs')
+  await writeFile(uploadPath, await renderUploader(opts.server, opts.token))
+  await writeFile(shellEditPath, await readFile(join(__dirname, 'shell-edit-entry.js'), 'utf8'))
+
+  const path = settingsPath()
+  let settings: Record<string, any> = {}
+  try {
+    settings = JSON.parse(await readFile(path, 'utf8'))
+    await writeFile(`${path}.bak-${Date.now()}`, JSON.stringify(settings, null, 2))
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`refusing to modify unparseable settings file: ${path}`)
+    }
+  }
+
+  settings.hooks ??= {}
+  const wanted: Array<{ event: string; matcher?: string; command: string; timeout: number }> = [
+    { event: 'SessionEnd', command: `node "${uploadPath}"`, timeout: 120 },
+    { event: 'PreToolUse', matcher: 'Bash', command: `node "${shellEditPath}"`, timeout: 20 },
+    { event: 'PostToolUse', matcher: 'Bash', command: `node "${shellEditPath}"`, timeout: 20 },
+  ]
+  for (const w of wanted) {
+    const entries: any[] = Array.isArray(settings.hooks[w.event]) ? settings.hooks[w.event] : []
+    const ours = entries.some((e) =>
+      (e?.hooks ?? []).some((h: any) => typeof h?.command === 'string' && h.command.includes(binDir)),
+    )
+    if (!ours) {
+      const entry: Record<string, any> = { hooks: [{ type: 'command', command: w.command, timeout: w.timeout }] }
+      if (w.matcher) entry.matcher = w.matcher
+      entries.push(entry)
+    }
+    settings.hooks[w.event] = entries
+  }
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, JSON.stringify(settings, null, 2) + '\n')
+  return { settingsPath: path, binDir }
 }
