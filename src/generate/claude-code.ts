@@ -31,6 +31,34 @@ const HOOKS_JSON = JSON.stringify(
           ],
         },
       ],
+      // Shell-edit capture: fingerprint the working tree around every Bash
+      // call and record the diff when it changed — the transcript carries no
+      // before/after for shell-mediated edits (sed/python/redirects), so this
+      // hook OBSERVES them. Tight timeout: PreToolUse blocks the tool.
+      PreToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            {
+              type: 'command',
+              command: 'node "${CLAUDE_PLUGIN_ROOT}/bin/tuneloop-shell-edit"',
+              timeout: 20,
+            },
+          ],
+        },
+      ],
+      PostToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            {
+              type: 'command',
+              command: 'node "${CLAUDE_PLUGIN_ROOT}/bin/tuneloop-shell-edit"',
+              timeout: 20,
+            },
+          ],
+        },
+      ],
     },
   },
   null,
@@ -52,6 +80,8 @@ async function pluginFiles(server: string, token: string): Promise<Array<{ path:
     { path: '.claude-plugin/plugin.json', data: PLUGIN_JSON },
     { path: 'hooks/hooks.json', data: HOOKS_JSON },
     { path: 'bin/tuneloop-upload', data: await renderUploader(server, token) },
+    // Local capture only — no server/token to bake; copied verbatim.
+    { path: 'bin/tuneloop-shell-edit', data: await readFile(join(__dirname, 'shell-edit-entry.js'), 'utf8') },
   ]
 }
 

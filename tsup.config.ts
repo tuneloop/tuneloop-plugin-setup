@@ -13,6 +13,17 @@ export default defineConfig([
     removeNodeProtocol: false,
   },
   {
+    entry: { 'shell-edit-entry': 'src/shell-edit-entry.ts' },
+    format: ['esm'],
+    target: 'node22',
+    platform: 'node',
+    clean: false,
+    dts: false,
+    sourcemap: false,
+    banner: { js: '#!/usr/bin/env node' },
+    removeNodeProtocol: false,
+  },
+  {
     entry: { 'upload-entry': 'src/upload-entry.ts' },
     format: ['esm'],
     target: 'node22',

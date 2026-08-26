@@ -11,6 +11,8 @@ export interface HookPayload {
   transcript_path?: string
   cwd?: string
   hook_event_name?: string
+  tool_name?: string
+  tool_use_id?: string
 }
 
 export interface UploadOptions {

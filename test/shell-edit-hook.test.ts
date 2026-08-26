@@ -1,0 +1,114 @@
+/**
+ * The shell-edit capture hook, driven exactly the way Claude Code drives it:
+ * spawn dist/shell-edit-entry.js with a hook payload on stdin, around real
+ * commands in a real scratch git repo. Every case here is a row of the design
+ * doc's behavior table (docs/plans/shell-edit-capture.md in the server repo).
+ *
+ * Requires `npm run build` first — it tests the shipped artifact, not source.
+ */
+import assert from 'node:assert/strict'
+import { execFileSync, execSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { test } from 'node:test'
+
+const HOOK = join(import.meta.dirname, '..', 'dist', 'shell-edit-entry.js')
+const SID = `hook-test-${process.pid}`
+const STATE = join(homedir(), '.tuneloop', 'claude-code', 'shell-edits', SID)
+
+function sh(cmd: string, cwd: string, env: Record<string, string> = {}): void {
+  execSync(cmd, { cwd, env: { ...process.env, ...env }, stdio: 'pipe' })
+}
+
+function invoke(event: 'PreToolUse' | 'PostToolUse', toolUseId: string, cwd: string): void {
+  execFileSync('node', [HOOK], {
+    input: JSON.stringify({ session_id: SID, cwd, hook_event_name: event, tool_name: 'Bash', tool_use_id: toolUseId }),
+  })
+}
+
+function events(): Array<{ kind: string; toolUseId: string; patch: string }> {
+  if (!existsSync(STATE)) return []
+  return readdirSync(STATE)
+    .filter((n) => n.startsWith('edit-'))
+    .sort()
+    .map((n) => JSON.parse(readFileSync(join(STATE, n), 'utf8')))
+}
+
+function repo(): string {
+  const r = mkdtempSync(join(tmpdir(), 'shell-edit-hook-'))
+  const backdate = { GIT_COMMITTER_DATE: '2026-01-01T10:00:00Z', GIT_AUTHOR_DATE: '2026-01-01T10:00:00Z' }
+  sh('git init -q', r)
+  writeFileSync(join(r, 'f.ts'), 'original\n')
+  sh('git add -A && git -c user.name=t -c user.email=t@t commit -q -m init', r, backdate)
+  return r
+}
+
+test('shell-edit hook behavior table', async (t) => {
+  rmSync(STATE, { recursive: true, force: true })
+  const r = repo()
+  t.after(() => {
+    rmSync(r, { recursive: true, force: true })
+    rmSync(STATE, { recursive: true, force: true })
+  })
+
+  await t.test('no-op command records nothing', () => {
+    invoke('PreToolUse', 't1', r)
+    invoke('PostToolUse', 't1', r)
+    assert.equal(events().length, 0)
+  })
+
+  await t.test('a real edit records kind=edit with the exact diff', () => {
+    invoke('PreToolUse', 't2', r)
+    writeFileSync(join(r, 'f.ts'), 'edited\n')
+    invoke('PostToolUse', 't2', r)
+    const [e] = events()
+    assert.equal(events().length, 1)
+    assert.equal(e!.kind, 'edit')
+    assert.equal(e!.toolUseId, 't2')
+    assert.ok(e!.patch.includes('-original') && e!.patch.includes('+edited'))
+  })
+
+  await t.test('commit-only moves refs, not bytes — records nothing', () => {
+    sh('git add -A', r) // stage the previous edit so the commit changes no content
+    const before = events().length
+    invoke('PreToolUse', 't3', r)
+    sh('git -c user.name=t -c user.email=t@t commit -q -m staged', r)
+    invoke('PostToolUse', 't3', r)
+    assert.equal(events().length, before)
+  })
+
+  await t.test('edit+commit in one command is authored (kind=edit) despite HEAD moving', () => {
+    invoke('PreToolUse', 't4', r)
+    writeFileSync(join(r, 'f.ts'), 'v3\n')
+    sh('git add -A && git -c user.name=t -c user.email=t@t commit -q -m v3', r)
+    invoke('PostToolUse', 't4', r)
+    const e = events().at(-1)!
+    assert.equal(e.kind, 'edit')
+    assert.ok(e.patch.includes('+v3'))
+  })
+
+  await t.test('checkout to an old commit is restored content (kind=revert)', () => {
+    // The genuinely old (backdated) root commit — a checkout target created
+    // seconds ago is indistinguishable from a commit-made-now, by design.
+    sh('git branch old-state $(git rev-list --max-parents=0 HEAD)', r)
+    invoke('PreToolUse', 't5', r)
+    sh('git checkout -q old-state', r)
+    invoke('PostToolUse', 't5', r)
+    assert.equal(events().at(-1)!.kind, 'revert')
+  })
+
+  await t.test('non-git directory: silent, exit 0, no event', () => {
+    const ng = mkdtempSync(join(tmpdir(), 'shell-edit-nongit-'))
+    const before = events().length
+    invoke('PreToolUse', 't6', ng)
+    invoke('PostToolUse', 't6', ng)
+    assert.equal(events().length, before)
+    rmSync(ng, { recursive: true, force: true })
+  })
+
+  await t.test('scratch hygiene: no pre-/idx- files survive a completed pair', () => {
+    const leftovers = readdirSync(STATE).filter((n) => n.startsWith('pre-') || n.startsWith('idx-'))
+    assert.deepEqual(leftovers, [])
+  })
+})
