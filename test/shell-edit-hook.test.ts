@@ -98,6 +98,38 @@ test('shell-edit hook behavior table', async (t) => {
     assert.equal(events().at(-1)!.kind, 'revert')
   })
 
+  await t.test('git stash: content vanishes but was SHELVED, not authored (kind=revert)', () => {
+    writeFileSync(join(r, 'f.ts'), 'work in progress\n')
+    invoke('PreToolUse', 't7', r)
+    sh('git stash -q', r)
+    invoke('PostToolUse', 't7', r)
+    assert.equal(events().at(-1)!.kind, 'revert')
+  })
+
+  await t.test('git stash pop: content reappears but was RESTORED (kind=revert)', () => {
+    invoke('PreToolUse', 't8', r)
+    sh('git stash pop -q', r)
+    invoke('PostToolUse', 't8', r)
+    assert.equal(events().at(-1)!.kind, 'revert')
+    sh('git checkout -q -- .', r) // clean up the popped WIP for later cases
+  })
+
+  await t.test('merge commit (mode-2 pull): fresh but TWO parents — arrival, not authorship (kind=revert)', () => {
+    // Build divergence: a side branch edits g.ts; main edits h.ts.
+    sh('git checkout -q -b side', r)
+    writeFileSync(join(r, 'g.ts'), 'from the other history\n')
+    sh('git add -A && git -c user.name=t -c user.email=t@t commit -q -m side', r)
+    sh('git checkout -q -', r)
+    writeFileSync(join(r, 'h.ts'), 'local work\n')
+    sh('git add -A && git -c user.name=t -c user.email=t@t commit -q -m local', r)
+    invoke('PreToolUse', 't9', r)
+    sh('git -c user.name=t -c user.email=t@t merge -q --no-edit side', r) // what a mode-2 `git pull` runs
+    invoke('PostToolUse', 't9', r)
+    const e = events().at(-1)!
+    assert.equal(e.kind, 'revert')
+    assert.ok(e.patch.includes('+from the other history')) // the arrival IS recorded, just not credited
+  })
+
   await t.test('non-git directory: silent, exit 0, no event', () => {
     const ng = mkdtempSync(join(tmpdir(), 'shell-edit-nongit-'))
     const before = events().length

@@ -56,7 +56,10 @@ function git(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<stri
 
 /** Tree-object hash of the working tree (tracked + untracked), via a
  *  throwaway index seeded from the real one so only changed files re-hash. */
-async function snapshot(cwd: string, scratch: string): Promise<{ tree: string; head: string | null } | null> {
+async function snapshot(
+  cwd: string,
+  scratch: string,
+): Promise<{ tree: string; head: string | null; stash: string | null } | null> {
   const toplevel = await git(['rev-parse', '--show-toplevel'], cwd)
   if (!toplevel) return null
   const realIndex = await git(['rev-parse', '--absolute-git-dir'], cwd)
@@ -72,7 +75,11 @@ async function snapshot(cwd: string, scratch: string): Promise<{ tree: string; h
   const tree = await git(['write-tree'], toplevel, env)
   if (!tree) return null
   const head = await git(['rev-parse', 'HEAD'], toplevel)
-  return { tree, head }
+  // The stash is a hidden commit with its own bookmark. Content changing
+  // while THIS bookmark moves means the content traveled to or from the
+  // shelf (`git stash` / `stash pop`) — shelved or restored, never authored.
+  const stash = await git(['rev-parse', '--quiet', '--verify', 'refs/stash'], toplevel)
+  return { tree, head, stash }
 }
 
 async function main(): Promise<void> {
@@ -104,7 +111,7 @@ async function main(): Promise<void> {
     }
 
     // PostToolUse
-    let pre: { tree?: string; head?: string | null } | null = null
+    let pre: { tree?: string; head?: string | null; stash?: string | null; ts?: string } | null = null
     try {
       pre = JSON.parse(await readFile(preFile, 'utf8'))
     } catch {
@@ -120,17 +127,25 @@ async function main(): Promise<void> {
     if (!patch) return
     if (patch.length > PATCH_MAX) patch = patch.slice(0, PATCH_MAX)
 
-    // HEAD moved: was the content change authored, or restored? An
-    // edit+commit-in-one-command CREATES its new HEAD during the command, so
-    // its committer date is fresh; a checkout/reset moves HEAD to a commit
-    // that already existed. Fresh commit → authored; old commit → restored.
+    // Content changed — authored, or merely moved around by git? Three
+    // bookmark checks, cheapest disqualifier first:
+    // - stash bookmark moved → the content traveled to/from the shelf
+    //   (`git stash` / `stash pop`): shelved or restored, never authored.
+    // - HEAD moved to an OLD commit (checkout, reset, fast-forward pull):
+    //   restored. Fresh commit = created by this command; its committer date
+    //   is compared in epoch seconds (%ct truncates to seconds).
+    // - fresh commit with TWO+ parents → a merge knot (merge pull): the
+    //   content ARRIVED from another history, it wasn't written here.
     let kind: 'edit' | 'revert' = 'edit'
-    if ((pre.head ?? null) !== (post.head ?? null)) {
-      // Epoch seconds on both sides (%ct truncates to seconds, so the pre
-      // timestamp must too — same machine, same clock, no grace needed).
+    if ((pre.stash ?? null) !== (post.stash ?? null)) {
+      kind = 'revert'
+    } else if ((pre.head ?? null) !== (post.head ?? null)) {
       const committed = post.head ? await git(['show', '-s', '--format=%ct', post.head], cwd) : null
-      const preTs = typeof (pre as { ts?: string }).ts === 'string' ? Date.parse((pre as { ts?: string }).ts!) : NaN
-      kind = committed && Number.isFinite(preTs) && Number(committed) >= Math.floor(preTs / 1000) ? 'edit' : 'revert'
+      const preTs = typeof pre.ts === 'string' ? Date.parse(pre.ts) : NaN
+      const fresh = committed && Number.isFinite(preTs) && Number(committed) >= Math.floor(preTs / 1000)
+      const parents = post.head ? await git(['show', '-s', '--format=%P', post.head], cwd) : null
+      const isMerge = (parents ?? '').trim().split(/\s+/).filter(Boolean).length >= 2
+      kind = fresh && !isMerge ? 'edit' : 'revert'
     }
     const event = {
       version: 1,
