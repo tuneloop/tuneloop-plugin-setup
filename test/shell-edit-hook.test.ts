@@ -153,6 +153,28 @@ test('shell-edit hook behavior table', async (t) => {
     assert.deepEqual(e.files, ['huge.txt'])
   })
 
+  await t.test('git checkout -- file: no bookmark moves, but post==pre-HEAD → revert', () => {
+    writeFileSync(join(r, 'f.ts'), 'dirty change\n')
+    invoke('PreToolUse', 't11', r)
+    sh('git checkout -- f.ts', r)
+    invoke('PostToolUse', 't11', r)
+    const e = events().at(-1)! as unknown as { kind: string; evidence: { restoredPaths?: string[] } }
+    assert.equal(e.kind, 'revert')
+    assert.deepEqual(e.evidence.restoredPaths, ['f.ts'])
+  })
+
+  await t.test('a mixed restore+edit command stays edit, with the restored file flagged', () => {
+    writeFileSync(join(r, 'f.ts'), 'dirty again\n')
+    invoke('PreToolUse', 't12', r)
+    sh('git checkout -- f.ts && echo mixed >> h.ts', r)
+    invoke('PostToolUse', 't12', r)
+    const e = events().at(-1)! as unknown as { kind: string; patch: string; evidence: { restoredPaths?: string[] } }
+    assert.equal(e.kind, 'edit')
+    assert.deepEqual(e.evidence.restoredPaths, ['f.ts'])
+    assert.ok(e.patch.includes('+mixed')) // the real edit is still in the diff
+    sh('git checkout -q -- h.ts', r)
+  })
+
   await t.test('non-git directory: silent, exit 0, no event', () => {
     const ng = mkdtempSync(join(tmpdir(), 'shell-edit-nongit-'))
     const before = events().length

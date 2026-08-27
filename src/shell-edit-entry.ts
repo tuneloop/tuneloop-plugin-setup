@@ -139,7 +139,40 @@ async function main(): Promise<void> {
       const parentLine = await git(['show', '-s', '--format=%P', post.head], cwd)
       parents = (parentLine ?? '').trim().split(/\s+/).filter(Boolean).length
     }
-    const kind: 'edit' | 'revert' = stashMoved ? 'revert' : headMoved ? (fresh && (parents ?? 0) < 2 ? 'edit' : 'revert') : 'edit'
+    let kind: 'edit' | 'revert' = stashMoved ? 'revert' : headMoved ? (fresh && (parents ?? 0) < 2 ? 'edit' : 'revert') : 'edit'
+
+    // The bookmark checks miss restores that move NOTHING (`git checkout --
+    // file`, `git reset --hard` at the same HEAD). Positive signal instead:
+    // a changed file whose AFTER-content is byte-identical to its PRE-HEAD
+    // version was restored, not authored — regardless of which command did
+    // it. Compared against the PRE head: after an edit+commit the content
+    // equals the NEW head by definition, and must stay authored.
+    let restoredPaths: string[] = []
+    if (kind === 'edit' && pre.head) {
+      const changed =
+        files ?? (await git(['diff', '--name-only', pre.tree, post.tree], cwd))?.split('\n').filter(Boolean) ?? []
+      if (changed.length) {
+        const blobsOf = async (treeish: string) => {
+          const outMap = new Map<string, string>()
+          const listing = await git(['ls-tree', '-r', treeish, '--', ...changed], cwd)
+          for (const lineTxt of (listing ?? '').split('\n')) {
+            const tab = lineTxt.indexOf('\t')
+            if (tab < 0) continue
+            const hash = lineTxt.slice(0, tab).split(/\s+/)[2]
+            if (hash) outMap.set(lineTxt.slice(tab + 1), hash)
+          }
+          return outMap
+        }
+        const headBlobs = await blobsOf(pre.head)
+        const postBlobs = await blobsOf(post.tree)
+        restoredPaths = changed.filter((n) => {
+          const after = postBlobs.get(n)
+          return !!after && after === headBlobs.get(n)
+        })
+        // Every changed file restored → the command as a whole was a restore.
+        if (restoredPaths.length === changed.length) kind = 'revert'
+      }
+    }
 
     const event = {
       kind,
@@ -154,7 +187,16 @@ async function main(): Promise<void> {
       // The evidence behind `kind`, so the server can reclassify past events
       // when the policy improves (cherry-pick, rebase pulls) — the verdict is
       // convenient, the observations are the record.
-      evidence: { preHead: pre.head ?? null, postHead: post.head, stashMoved, fresh, parents },
+      evidence: {
+        preHead: pre.head ?? null,
+        postHead: post.head,
+        stashMoved,
+        fresh,
+        parents,
+        // Files this command merely restored to their pre-HEAD content — the
+        // parser skips them even inside a mixed (edit + restore) command.
+        ...(restoredPaths.length ? { restoredPaths } : {}),
+      },
       patch,
       ...(files ? { files } : {}),
     }
