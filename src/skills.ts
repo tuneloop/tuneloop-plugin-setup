@@ -223,7 +223,7 @@ async function readCommandFile(dir: string, file: string): Promise<SkillEntry | 
 
 // ---- per-harness config-home resolvers (mirror the OSS environment readers) ----
 
-function claudeHome(): string {
+export function claudeHome(): string {
   return process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
 }
 function codexHome(): string {

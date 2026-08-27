@@ -116,6 +116,13 @@ async function runGenerate(server: string, token: string, harness: Harness, flag
   const output = str(flags.o) ?? str(flags.output)
   const install = flags.install === true
 
+  // Contradictory modes fail loudly — silently picking one ships the wrong
+  // artifact and the admin only finds out when nothing captures.
+  if (flags.marketplace === true && install) {
+    process.stderr.write('--marketplace and --install are different artifacts; pass one.\n')
+    return 1
+  }
+
   // Codex has no drop-in plugin dir: it needs its config.toml edited and the
   // hook trusted via the app-server RPC, so it always installs directly.
   if (harness === 'codex') {

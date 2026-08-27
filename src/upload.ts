@@ -47,7 +47,10 @@ export async function upload(opts: UploadOptions): Promise<UploadResult> {
     extras: opts.extras,
   })
   const body = Buffer.from(encodeBundle(bundle), 'utf8')
-  if (bundle.files.every((f) => f.content.length === 0)) throw new Error(`transcript is empty: ${path}`)
+  // Guard the PRIMARY transcript specifically: a non-empty sidecar must not
+  // smuggle an empty/truncated transcript past the check.
+  const primary = bundle.files.find((f) => f.name === bundle.primary)
+  if (!primary || primary.content.length === 0) throw new Error(`transcript is empty: ${path}`)
 
   return send({
     server: opts.server,

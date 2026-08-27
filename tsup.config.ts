@@ -1,5 +1,19 @@
 import { defineConfig } from 'tsup'
 
+/** Shared shape for the standalone entry scripts (hook/upload entries): ESM,
+ *  shebang'd, no sourcemaps — differing only in their entry name. */
+const entryScript = (name: string, src?: string) => ({
+  entry: { [name]: src ?? `src/${name}.ts` },
+  format: ['esm' as const],
+  target: 'node22' as const,
+  platform: 'node' as const,
+  clean: false,
+  dts: false,
+  sourcemap: false,
+  banner: { js: '#!/usr/bin/env node' },
+  removeNodeProtocol: false,
+})
+
 export default defineConfig([
   {
     entry: { cli: 'src/cli.ts' },
@@ -12,39 +26,9 @@ export default defineConfig([
     banner: { js: '#!/usr/bin/env node' },
     removeNodeProtocol: false,
   },
-  {
-    entry: { 'shell-edit-entry': 'src/shell-edit-entry.ts' },
-    format: ['esm'],
-    target: 'node22',
-    platform: 'node',
-    clean: false,
-    dts: false,
-    sourcemap: false,
-    banner: { js: '#!/usr/bin/env node' },
-    removeNodeProtocol: false,
-  },
-  {
-    entry: { 'upload-entry': 'src/upload-entry.ts' },
-    format: ['esm'],
-    target: 'node22',
-    platform: 'node',
-    clean: false,
-    dts: false,
-    sourcemap: false,
-    banner: { js: '#!/usr/bin/env node' },
-    removeNodeProtocol: false,
-  },
-  {
-    entry: { 'codex-upload-entry': 'src/codex-upload-entry.ts' },
-    format: ['esm'],
-    target: 'node22',
-    platform: 'node',
-    clean: false,
-    dts: false,
-    sourcemap: false,
-    banner: { js: '#!/usr/bin/env node' },
-    removeNodeProtocol: false,
-  },
+  entryScript('shell-edit-entry'),
+  entryScript('upload-entry'),
+  entryScript('codex-upload-entry'),
   // OpenCode plugin + Pi extension: single self-contained modules (no shebang —
   // they're loaded by the harness, not executed). `bun:sqlite` stays external
   // (Bun provides it at runtime); node builtins keep their `node:` prefix.

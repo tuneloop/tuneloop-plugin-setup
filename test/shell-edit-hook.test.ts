@@ -21,9 +21,10 @@ function sh(cmd: string, cwd: string, env: Record<string, string> = {}): void {
   execSync(cmd, { cwd, env: { ...process.env, ...env }, stdio: 'pipe' })
 }
 
-function invoke(event: 'PreToolUse' | 'PostToolUse', toolUseId: string, cwd: string): void {
+function invoke(event: 'PreToolUse' | 'PostToolUse', toolUseId: string, cwd: string, env: Record<string, string> = {}): void {
   execFileSync('node', [HOOK], {
     input: JSON.stringify({ session_id: SID, cwd, hook_event_name: event, tool_name: 'Bash', tool_use_id: toolUseId }),
+    env: { ...process.env, ...env },
   })
 }
 
@@ -131,6 +132,25 @@ test('shell-edit hook behavior table', async (t) => {
     const e = events().at(-1)!
     assert.equal(e.kind, 'revert')
     assert.ok(e.patch.includes('+from the other history')) // the arrival IS recorded, just not credited
+  })
+
+  await t.test('events carry the classification EVIDENCE, not just the verdict', () => {
+    const e = events().at(-1)! as unknown as { evidence?: { parents?: number; stashMoved?: boolean } }
+    assert.ok(e.evidence, 'evidence present')
+    assert.equal(e.evidence!.parents, 2) // the merge knot from the previous case
+    assert.equal(e.evidence!.stashMoved, false)
+  })
+
+  await t.test('a diff too large for the buffer degrades to a file list, never a drop', () => {
+    const before = events().length
+    invoke('PreToolUse', 't10', r)
+    writeFileSync(join(r, 'huge.txt'), 'x'.repeat(2000) + '\n')
+    // Force the fallback with a tiny diff buffer.
+    invoke('PostToolUse', 't10', r, { TUNELOOP_DIFF_MAX_BUFFER: '64' })
+    const e = events().at(-1)! as unknown as { patch: string; files?: string[] }
+    assert.equal(events().length, before + 1)
+    assert.equal(e.patch, '')
+    assert.deepEqual(e.files, ['huge.txt'])
   })
 
   await t.test('non-git directory: silent, exit 0, no event', () => {

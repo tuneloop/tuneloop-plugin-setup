@@ -6,24 +6,28 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
 const CLI = join(import.meta.dirname, '..', 'dist', 'cli.js')
 
+// Both the settings file AND the bin dir are isolated — a developer's real
+// ~/.tuneloop install must never be overwritten by a test run.
+let BIN = ''
 function run(settingsPath: string): string {
   return execFileSync(
     'node',
     [CLI, '--server', 'http://localhost:9999', '--token', 'tok-test', '--harness', 'claude-code', '--install'],
-    { env: { ...process.env, TUNELOOP_CLAUDE_SETTINGS: settingsPath }, encoding: 'utf8' },
+    { env: { ...process.env, TUNELOOP_CLAUDE_SETTINGS: settingsPath, TUNELOOP_CLAUDE_BIN: BIN }, encoding: 'utf8' },
   )
 }
 
 test('claude-code --install merges hooks into settings.json', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'cc-install-'))
   const settings = join(dir, 'settings.json')
+  BIN = join(dir, 'bin')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
   await t.test('fresh install writes scripts and all three hooks', () => {
@@ -34,11 +38,10 @@ test('claude-code --install merges hooks into settings.json', async (t) => {
     }
     assert.equal(s.hooks.PreToolUse[0].matcher, 'Bash')
     assert.equal(s.hooks.SessionEnd[0].matcher, undefined)
-    const bin = join(homedir(), '.tuneloop', 'claude-code', 'bin')
-    assert.ok(existsSync(join(bin, 'tuneloop-upload.mjs')))
-    assert.ok(existsSync(join(bin, 'tuneloop-shell-edit.mjs')))
+    assert.ok(existsSync(join(BIN, 'tuneloop-upload.mjs')))
+    assert.ok(existsSync(join(BIN, 'tuneloop-shell-edit.mjs')))
     // server + token baked into the uploader, not the capture script
-    assert.ok(readFileSync(join(bin, 'tuneloop-upload.mjs'), 'utf8').includes('tok-test'))
+    assert.ok(readFileSync(join(BIN, 'tuneloop-upload.mjs'), 'utf8').includes('tok-test'))
   })
 
   await t.test('re-install is idempotent — no duplicate entries', () => {
@@ -67,5 +70,43 @@ test('claude-code --install merges hooks into settings.json', async (t) => {
     writeFileSync(settings, '{not json')
     assert.throws(() => run(settings))
     assert.equal(readFileSync(settings, 'utf8'), '{not json')
+  })
+
+  await t.test('non-object settings JSON is refused (an array would silently drop hooks)', () => {
+    writeFileSync(settings, '[]')
+    assert.throws(() => run(settings))
+    assert.equal(readFileSync(settings, 'utf8'), '[]')
+    writeFileSync(settings, 'null')
+    assert.throws(() => run(settings))
+  })
+
+  await t.test('a non-array hooks entry is refused, never clobbered', () => {
+    writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: { matcher: 'Write', hooks: [{ type: 'command', command: 'echo mine' }] } } }))
+    assert.throws(() => run(settings))
+    const after = JSON.parse(readFileSync(settings, 'utf8'))
+    assert.equal(after.hooks.PreToolUse.matcher, 'Write') // untouched
+  })
+
+  await t.test('re-install does not stack backups; a pristine file gets exactly one', () => {
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(settings, JSON.stringify({ model: 'opus' }))
+    run(settings)
+    run(settings)
+    run(settings)
+    const baks = readdirSync(dir).filter((n) => n.startsWith('settings.json.bak-'))
+    assert.equal(baks.length, 1)
+    // and the one backup is the PRE-tuneloop state
+    assert.ok(!readFileSync(join(dir, baks[0]!), 'utf8').includes('tuneloop'))
+  })
+
+  await t.test('a changed hook definition updates our entry instead of freezing it', () => {
+    const s = JSON.parse(readFileSync(settings, 'utf8'))
+    s.hooks.PreToolUse[0].hooks[0].timeout = 5 // simulate a stale first-install value
+    writeFileSync(settings, JSON.stringify(s))
+    run(settings)
+    const after = JSON.parse(readFileSync(settings, 'utf8'))
+    assert.equal(after.hooks.PreToolUse[0].hooks[0].timeout, 20) // brought back to spec
+    assert.equal(after.hooks.PreToolUse.length, 1) // updated, not duplicated
   })
 })

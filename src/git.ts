@@ -5,6 +5,31 @@ import { promisify } from 'node:util'
 
 const run = promisify(execFile)
 
+/**
+ * Generalized git runner for callers that need env/timeout/buffer control —
+ * the shell-edit hook runs around EVERY Bash call, so it also pins the env
+ * guards that keep git from ever hanging a session: no credential prompts,
+ * no waiting on index locks.
+ */
+export function gitExec(
+  args: string[],
+  opts: { cwd: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; maxBufferBytes?: number },
+): Promise<string | null> {
+  return new Promise((resolvePromise) => {
+    execFile(
+      'git',
+      args,
+      {
+        cwd: opts.cwd,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', ...opts.env },
+        timeout: opts.timeoutMs ?? 15_000,
+        maxBuffer: opts.maxBufferBytes ?? 8 * 1024 * 1024,
+      },
+      (err, stdout) => resolvePromise(err ? null : String(stdout).replace(/\n$/, '')),
+    )
+  })
+}
+
 async function git(args: string[], cwd?: string): Promise<string | null> {
   try {
     const { stdout } = await run('git', args, { cwd, timeout: 5000 })
