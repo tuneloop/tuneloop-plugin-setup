@@ -59,7 +59,7 @@ function git(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<stri
 async function snapshot(
   cwd: string,
   scratch: string,
-): Promise<{ tree: string; head: string | null; stash: string | null } | null> {
+): Promise<{ tree: string; head: string | null; stash: string | null; toplevel: string } | null> {
   const toplevel = await git(['rev-parse', '--show-toplevel'], cwd)
   if (!toplevel) return null
   const realIndex = await git(['rev-parse', '--absolute-git-dir'], cwd)
@@ -79,7 +79,7 @@ async function snapshot(
   // while THIS bookmark moves means the content traveled to or from the
   // shelf (`git stash` / `stash pop`) — shelved or restored, never authored.
   const stash = await git(['rev-parse', '--quiet', '--verify', 'refs/stash'], toplevel)
-  return { tree, head, stash }
+  return { tree, head, stash, toplevel }
 }
 
 async function main(): Promise<void> {
@@ -153,6 +153,11 @@ async function main(): Promise<void> {
       toolUseId,
       ts: new Date().toISOString(),
       cwd,
+      // git diff paths are relative to the repo's TOP folder, not cwd — and
+      // only this hook knows that folder at capture time. The server joins
+      // it with each path so downstream consumers see absolute paths, the
+      // same frame native Edit calls use.
+      toplevel: post.toplevel,
       patch,
     }
     await writeFile(join(dir, `edit-${Date.now()}-${process.pid}.json`), JSON.stringify(event))

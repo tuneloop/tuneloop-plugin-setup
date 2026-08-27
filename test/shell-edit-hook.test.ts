@@ -67,6 +67,9 @@ test('shell-edit hook behavior table', async (t) => {
     assert.equal(e!.kind, 'edit')
     assert.equal(e!.toolUseId, 't2')
     assert.ok(e!.patch.includes('-original') && e!.patch.includes('+edited'))
+    // git diff paths are toplevel-relative; the event must carry the toplevel
+    // so the server can absolutize them into the native-Edit path frame.
+    assert.ok(typeof (e as { toplevel?: string }).toplevel === 'string' && (e as { toplevel?: string }).toplevel!.length > 0)
   })
 
   await t.test('commit-only moves refs, not bytes — records nothing', () => {
