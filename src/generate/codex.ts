@@ -23,7 +23,8 @@ import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { codexHome } from '../codex.js'
+// `.ts` (not `.js`) so test/ can load this module under Node's native type stripping.
+import { codexHome } from '../codex.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
