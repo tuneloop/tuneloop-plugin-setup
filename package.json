@@ -1,6 +1,6 @@
 {
   "name": "tuneloop-plugin-setup",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Generate per-harness plugins for uploading AI coding session transcripts to a Tuneloop server.",
   "type": "module",
   "bin": {
